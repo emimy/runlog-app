@@ -1219,20 +1219,24 @@ saveBtn.addEventListener('click', async () => {
     const type = sessionType.value;
     const isEdit = editingSessionId !== null;
     const existing = isEdit ? await getSession(editingSessionId) : null;
-    const session = {
-      id: isEdit ? editingSessionId : uid(),
-      type,
-      typeLabel: SESSION_LABELS[type].label,
-      otherDesc: type === 'other' ? (otherDesc.value.trim() || null) : null,
-      date: dateInput.value,
-      equipment: currentEquipment,
-      treadmill: currentEquipment !== 'outdoor',  // kept for backward compat in analysis scripts
-      distanceKm: null,
-      avgSpeedKmh: null,
-      durationMinutes: null,
-      workoutNotes: null,
-      createdAt: isEdit && existing ? existing.createdAt : new Date().toISOString(),
-    };
+    // When editing, start from the existing session so unknown fields (like _whoopData
+    // added by backfill scripts) are preserved. When creating new, start from empty.
+    const session = isEdit && existing
+      ? { ...existing }
+      : {};
+    // Overlay the fields the form owns
+    session.id = isEdit ? editingSessionId : uid();
+    session.type = type;
+    session.typeLabel = SESSION_LABELS[type].label;
+    session.otherDesc = type === 'other' ? (otherDesc.value.trim() || null) : null;
+    session.date = dateInput.value;
+    session.equipment = currentEquipment;
+    session.treadmill = currentEquipment !== 'outdoor';  // backward compat
+    session.distanceKm = null;
+    session.avgSpeedKmh = null;
+    session.durationMinutes = null;
+    session.workoutNotes = null;
+    session.createdAt = isEdit && existing ? existing.createdAt : new Date().toISOString();
 
     if (currentEquipment === 'outdoor') {
       const h = parseNum(outdoorHours.value) || 0;
