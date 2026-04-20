@@ -780,8 +780,22 @@ async function ghListSessions() {
 }
 
 async function ghFetchSession(file) {
-  const res = await fetch(file.download_url, { headers: ghHeaders() });
-  if (!res.ok) throw new Error(`Fetch ${file.name}: ${res.status}`);
+  // Use authenticated API endpoint (not file.download_url which doesn't auth for private repos)
+  const apiUrl = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${file.path}`;
+  console.log('[ghFetchSession] GET', apiUrl);
+  const res = await fetch(apiUrl, {
+    headers: {
+      ...ghHeaders(),
+      // Request raw content directly instead of base64-wrapped JSON metadata
+      'Accept': 'application/vnd.github.raw+json',
+    },
+  });
+  console.log('[ghFetchSession]', file.name, 'status:', res.status);
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error('[ghFetchSession] error body:', errText.slice(0, 200));
+    throw new Error(`Fetch ${file.name}: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -815,20 +829,27 @@ async function pullFromGh() {
   const files = await ghListSessions();
   const local = await getAllSessions();
   const localIds = new Set(local.map(s => s.id));
-  let added = 0, skipped = 0;
+  let added = 0, skipped = 0, failed = 0;
+  let lastError = null;
   for (const f of files) {
     try {
       const session = await ghFetchSession(f);
-      if (!session.id) continue;
+      if (!session.id) {
+        console.warn('[pullFromGh] skipping file with no id:', f.name);
+        failed++;
+        continue;
+      }
       if (localIds.has(session.id)) { skipped++; continue; }
       session.syncedAt = new Date().toISOString();
       await putSession(session);
       added++;
     } catch (err) {
-      console.warn('Failed to pull', f.name, err);
+      console.warn('[pullFromGh] failed to pull', f.name, err);
+      failed++;
+      lastError = err.message;
     }
   }
-  return { total: files.length, added, skipped };
+  return { total: files.length, added, skipped, failed, lastError };
 }
 
 // ============================================================
@@ -1170,6 +1191,8 @@ document.getElementById('gh-pull-btn').addEventListener('click', async () => {
     const r = await pullFromGh();
     if (r.total === 0) {
       toast('No files found in repo (check console)', true);
+    } else if (r.failed > 0) {
+      toast(`Found ${r.total}, ${r.failed} failed: ${r.lastError || 'see console'}`, true);
     } else {
       toast(`Found ${r.total}, pulled ${r.added} new, skipped ${r.skipped}`);
     }
