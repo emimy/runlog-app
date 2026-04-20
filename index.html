@@ -178,9 +178,32 @@
   .treadmill-fields {
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.25s ease;
+    transition: max-height 0.3s ease;
   }
-  .treadmill-fields.open { max-height: 200px; margin-top: 18px; }
+  .treadmill-fields.open { max-height: 400px; }
+
+  .equipment-picker {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+  }
+  .equipment-btn {
+    padding: 10px 8px;
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .equipment-btn.active {
+    background: var(--accent);
+    color: #052e16;
+    border-color: var(--accent);
+  }
 
   /* file upload */
   .file-drop {
@@ -400,14 +423,30 @@
         </label>
       </div>
       <div class="treadmill-fields" id="treadmill-fields">
-        <div class="row-2">
-          <div>
-            <label for="distance">Distance (km)</label>
-            <input type="number" id="distance" step="0.01" inputmode="decimal" placeholder="6.50">
+        <div class="field" style="margin-top: 18px; margin-bottom: 0;">
+          <label>Equipment</label>
+          <div class="equipment-picker">
+            <button type="button" class="equipment-btn active" data-equipment="home_treadmill">Home Treadmill</button>
+            <button type="button" class="equipment-btn" data-equipment="gym_treadmill">Gym Treadmill</button>
+            <button type="button" class="equipment-btn" data-equipment="gym_assault_runner">Assault Runner</button>
           </div>
-          <div>
-            <label for="speed">Avg Speed (km/h)</label>
-            <input type="number" id="speed" step="0.1" inputmode="decimal" placeholder="8.5">
+        </div>
+        <div class="equipment-detail" id="equipment-ds-fields">
+          <div class="row-2" style="margin-top: 14px;">
+            <div>
+              <label for="distance">Distance (km)</label>
+              <input type="number" id="distance" step="0.01" inputmode="decimal" placeholder="6.50">
+            </div>
+            <div>
+              <label for="speed">Avg Speed (km/h)</label>
+              <input type="number" id="speed" step="0.1" inputmode="decimal" placeholder="8.5">
+            </div>
+          </div>
+        </div>
+        <div class="equipment-detail" id="equipment-notes-field" style="display:none">
+          <div style="margin-top: 14px;">
+            <label for="workout-notes">Workout Notes</label>
+            <textarea id="workout-notes" placeholder="e.g. 10 cal × 10 rounds, 1 min rest"></textarea>
           </div>
         </div>
       </div>
@@ -644,6 +683,12 @@ const SESSION_LABELS = {
   'other':          { label: 'Other',         intensity: 'moderate' },
 };
 
+const EQUIPMENT_LABELS = {
+  'home_treadmill':     'home treadmill',
+  'gym_treadmill':      'gym treadmill',
+  'gym_assault_runner': 'assault runner',
+};
+
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -877,11 +922,17 @@ const treadmillToggle = document.getElementById('treadmill-toggle');
 const treadmillFields = document.getElementById('treadmill-fields');
 const distanceInput = document.getElementById('distance');
 const speedInput = document.getElementById('speed');
+const notesInput = document.getElementById('workout-notes');
+const dsFields = document.getElementById('equipment-ds-fields');
+const notesField = document.getElementById('equipment-notes-field');
+const equipmentBtns = document.querySelectorAll('.equipment-btn');
 const fileDrop = document.getElementById('file-drop');
 const fileInput = document.getElementById('screenshot');
 const fileText = document.getElementById('file-text');
 const preview = document.getElementById('preview');
 const saveBtn = document.getElementById('save-btn');
+
+let currentEquipment = 'home_treadmill';
 
 // Default to today
 dateInput.value = new Date().toISOString().slice(0, 10);
@@ -892,6 +943,21 @@ sessionType.addEventListener('change', () => {
 
 treadmillToggle.addEventListener('change', () => {
   treadmillFields.classList.toggle('open', treadmillToggle.checked);
+});
+
+equipmentBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    equipmentBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentEquipment = btn.dataset.equipment;
+    if (currentEquipment === 'gym_assault_runner') {
+      dsFields.style.display = 'none';
+      notesField.style.display = 'block';
+    } else {
+      dsFields.style.display = 'block';
+      notesField.style.display = 'none';
+    }
+  });
 });
 
 fileDrop.addEventListener('click', () => fileInput.click());
@@ -919,8 +985,10 @@ saveBtn.addEventListener('click', async () => {
       otherDesc: type === 'other' ? (otherDesc.value.trim() || null) : null,
       date: dateInput.value,
       treadmill: treadmillToggle.checked,
-      distanceKm: treadmillToggle.checked && distanceInput.value ? parseFloat(distanceInput.value) : null,
-      avgSpeedKmh: treadmillToggle.checked && speedInput.value ? parseFloat(speedInput.value) : null,
+      equipment: treadmillToggle.checked ? currentEquipment : null,
+      distanceKm: treadmillToggle.checked && currentEquipment !== 'gym_assault_runner' && distanceInput.value ? parseFloat(distanceInput.value) : null,
+      avgSpeedKmh: treadmillToggle.checked && currentEquipment !== 'gym_assault_runner' && speedInput.value ? parseFloat(speedInput.value) : null,
+      workoutNotes: treadmillToggle.checked && currentEquipment === 'gym_assault_runner' && notesInput.value ? notesInput.value.trim() : null,
       createdAt: new Date().toISOString(),
     };
 
@@ -958,6 +1026,12 @@ function resetForm() {
   treadmillFields.classList.remove('open');
   distanceInput.value = '';
   speedInput.value = '';
+  notesInput.value = '';
+  currentEquipment = 'home_treadmill';
+  equipmentBtns.forEach(b => b.classList.remove('active'));
+  equipmentBtns[0].classList.add('active');
+  dsFields.style.display = 'block';
+  notesField.style.display = 'none';
   fileInput.value = '';
   currentFileBlob = null;
   preview.style.display = 'none';
@@ -989,7 +1063,8 @@ async function renderList() {
     if (e.treadmill) {
       if (e.distanceKm != null) details.push(`<strong>${e.distanceKm} km</strong>`);
       if (e.avgSpeedKmh != null) details.push(`<strong>${e.avgSpeedKmh} km/h</strong>`);
-      details.push('treadmill');
+      const equipLabel = EQUIPMENT_LABELS[e.equipment] || 'treadmill';
+      details.push(equipLabel);
     } else {
       details.push('outdoor');
     }
@@ -1042,8 +1117,10 @@ async function openModal(id) {
   ];
   if (s.otherDesc) rows.push(['Description', s.otherDesc]);
   rows.push(['Treadmill', s.treadmill ? 'Yes' : 'No']);
+  if (s.equipment) rows.push(['Equipment', EQUIPMENT_LABELS[s.equipment] || s.equipment]);
   if (s.distanceKm != null) rows.push(['Distance', s.distanceKm + ' km']);
   if (s.avgSpeedKmh != null) rows.push(['Avg Speed', s.avgSpeedKmh + ' km/h']);
+  if (s.workoutNotes) rows.push(['Notes', s.workoutNotes]);
   rows.push(['Logged at', new Date(s.createdAt).toLocaleString()]);
 
   modalKv.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
@@ -1240,7 +1317,7 @@ document.getElementById('export-csv-btn').addEventListener('click', async () => 
   const entries = await getAllSessions();
   if (entries.length === 0) return toast('Nothing to export', true);
   entries.sort((a, b) => a.date.localeCompare(b.date));
-  const headers = ['date', 'type', 'type_label', 'other_desc', 'treadmill', 'distance_km', 'avg_speed_kmh', 'has_image', 'logged_at', 'id'];
+  const headers = ['date', 'type', 'type_label', 'other_desc', 'treadmill', 'equipment', 'distance_km', 'avg_speed_kmh', 'workout_notes', 'has_image', 'logged_at', 'id'];
   const rows = entries.map(e => {
     const meta = SESSION_LABELS[e.type] || SESSION_LABELS.other;
     return [
@@ -1249,8 +1326,10 @@ document.getElementById('export-csv-btn').addEventListener('click', async () => 
       meta.label,
       e.otherDesc || '',
       e.treadmill ? 'true' : 'false',
+      e.equipment || '',
       e.distanceKm != null ? e.distanceKm : '',
       e.avgSpeedKmh != null ? e.avgSpeedKmh : '',
+      e.workoutNotes || '',
       e.imageDataUrl ? 'true' : 'false',
       e.createdAt,
       e.id,
