@@ -459,6 +459,14 @@
       <button class="secondary" id="gh-pull-btn" disabled>Pull from GitHub</button>
       <div class="btn-spacer"></div>
       <button class="secondary" id="gh-clear-btn" style="display:none">Remove GitHub Config</button>
+      <div class="btn-spacer"></div>
+      <div class="toggle-row" id="auto-pull-row" style="display:none">
+        <span class="toggle-label">Auto-pull on app open</span>
+        <label class="switch" for="auto-pull-toggle">
+          <input type="checkbox" id="auto-pull-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
     </div>
 
     <div class="settings-group">
@@ -1072,6 +1080,8 @@ async function renderSettings() {
     syncBtn.disabled = false;
     pullBtn.disabled = false;
     clearBtn.style.display = 'block';
+    document.getElementById('auto-pull-row').style.display = 'flex';
+    document.getElementById('auto-pull-toggle').checked = !!(await getConfig('autoPull'));
   } else {
     ownerInput.value = '';
     repoInput.value = '';
@@ -1081,8 +1091,14 @@ async function renderSettings() {
     syncBtn.disabled = true;
     pullBtn.disabled = true;
     clearBtn.style.display = 'none';
+    document.getElementById('auto-pull-row').style.display = 'none';
   }
 }
+
+document.getElementById('auto-pull-toggle').addEventListener('change', async (e) => {
+  await setConfig('autoPull', e.target.checked);
+  toast(e.target.checked ? 'Auto-pull enabled' : 'Auto-pull disabled');
+});
 
 document.getElementById('gh-save-btn').addEventListener('click', async () => {
   const owner = document.getElementById('gh-owner').value.trim();
@@ -1273,6 +1289,34 @@ async function updateCount() {
       navigator.storage.persist().catch(() => {});
     }
     updateCount();
+
+    // Auto-pull from GitHub on startup if enabled
+    if (ghConfig) {
+      const autoPull = await getConfig('autoPull');
+      // default to enabled on first use
+      if (autoPull === null) {
+        await setConfig('autoPull', true);
+      }
+      if (autoPull !== false) {
+        // background pull, don't block UI
+        (async () => {
+          try {
+            const r = await pullFromGh();
+            if (r.added > 0) {
+              toast(`Pulled ${r.added} new from GitHub`);
+              updateCount();
+              // if user is currently viewing History or Settings, refresh
+              const activeView = document.querySelector('.view.active');
+              if (activeView && activeView.id === 'view-list') renderList();
+              if (activeView && activeView.id === 'view-settings') renderSettings();
+            }
+          } catch (err) {
+            console.warn('Auto-pull failed:', err);
+            // silent failure — manual pull still available
+          }
+        })();
+      }
+    }
   } catch (e) {
     toast('Database error: ' + e.message, true);
     console.error(e);
