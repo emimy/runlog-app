@@ -448,7 +448,7 @@
         </div>
         <div>
           <label for="outdoor-distance">Distance (km)</label>
-          <input type="number" id="outdoor-distance" step="0.01" inputmode="decimal" placeholder="10.5">
+          <input type="text" id="outdoor-distance" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="10.5" autocomplete="off">
         </div>
       </div>
       <div id="outdoor-speed-hint" class="speed-hint"></div>
@@ -458,11 +458,11 @@
       <div class="row-2">
         <div>
           <label for="distance">Distance (km)</label>
-          <input type="number" id="distance" step="0.01" inputmode="decimal" placeholder="6.50">
+          <input type="text" id="distance" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="6.50" autocomplete="off">
         </div>
         <div>
           <label for="speed">Avg Speed (km/h)</label>
-          <input type="number" id="speed" step="0.1" inputmode="decimal" placeholder="8.5">
+          <input type="text" id="speed" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="8.5" autocomplete="off">
         </div>
       </div>
     </div>
@@ -726,6 +726,16 @@ function blobToDataURL(blob) {
   });
 }
 
+// Parse user-entered numbers tolerantly: accepts "4.2" and "4,2" and strips whitespace.
+// Returns null on empty, NaN, or unparseable input.
+function parseNum(str) {
+  if (str == null) return null;
+  const s = String(str).trim().replace(',', '.');
+  if (s === '') return null;
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
 function dataURLToBlob(dataUrl) {
   const [meta, b64] = dataUrl.split(',');
   const mime = meta.match(/:(.*?);/)[1];
@@ -982,9 +992,9 @@ equipmentBtns.forEach(btn => {
 });
 
 function computeOutdoorSpeed() {
-  const h = parseFloat(outdoorHours.value) || 0;
-  const m = parseFloat(outdoorMins.value) || 0;
-  const d = parseFloat(outdoorDistance.value) || 0;
+  const h = parseNum(outdoorHours.value) || 0;
+  const m = parseNum(outdoorMins.value) || 0;
+  const d = parseNum(outdoorDistance.value) || 0;
   const totalHours = h + m / 60;
   if (totalHours > 0 && d > 0) {
     const speed = d / totalHours;
@@ -1113,18 +1123,20 @@ saveBtn.addEventListener('click', async () => {
     };
 
     if (currentEquipment === 'outdoor') {
-      const h = parseFloat(outdoorHours.value) || 0;
-      const m = parseFloat(outdoorMins.value) || 0;
+      const h = parseNum(outdoorHours.value) || 0;
+      const m = parseNum(outdoorMins.value) || 0;
       const totalMin = h * 60 + m;
-      const d = parseFloat(outdoorDistance.value);
+      const d = parseNum(outdoorDistance.value);
       if (totalMin > 0) session.durationMinutes = totalMin;
-      if (!isNaN(d) && d > 0) session.distanceKm = d;
+      if (d != null && d > 0) session.distanceKm = d;
       if (session.durationMinutes && session.distanceKm) {
         session.avgSpeedKmh = Math.round((session.distanceKm / (session.durationMinutes / 60)) * 100) / 100;
       }
     } else if (currentEquipment === 'home_treadmill' || currentEquipment === 'gym_treadmill') {
-      if (distanceInput.value) session.distanceKm = parseFloat(distanceInput.value);
-      if (speedInput.value) session.avgSpeedKmh = parseFloat(speedInput.value);
+      const d = parseNum(distanceInput.value);
+      const sp = parseNum(speedInput.value);
+      if (d != null) session.distanceKm = d;
+      if (sp != null) session.avgSpeedKmh = sp;
     } else if (currentEquipment === 'gym_assault_runner') {
       if (notesInput.value) session.workoutNotes = notesInput.value.trim();
     }
