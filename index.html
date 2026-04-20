@@ -758,11 +758,25 @@ async function ghPutSession(session) {
 
 async function ghListSessions() {
   const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/sessions`;
+  console.log('[ghListSessions] GET', url);
   const res = await fetch(url, { headers: ghHeaders() });
-  if (res.status === 404) return [];
-  if (!res.ok) throw new Error(`List sessions: ${res.status}`);
-  const files = await res.json();
-  return files.filter(f => f.name.endsWith('.json'));
+  console.log('[ghListSessions] status:', res.status);
+  if (res.status === 404) {
+    console.warn('[ghListSessions] 404 — sessions folder not found or no permission to list it');
+    return [];
+  }
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error('[ghListSessions] error body:', errText);
+    throw new Error(`List sessions: ${res.status} ${errText.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  console.log('[ghListSessions] got', Array.isArray(data) ? data.length : 'non-array', 'items');
+  if (!Array.isArray(data)) {
+    console.error('[ghListSessions] unexpected response:', data);
+    return [];
+  }
+  return data.filter(f => f.name.endsWith('.json'));
 }
 
 async function ghFetchSession(file) {
@@ -1154,7 +1168,11 @@ document.getElementById('gh-pull-btn').addEventListener('click', async () => {
   btn.textContent = 'Pulling...';
   try {
     const r = await pullFromGh();
-    toast(`Pulled ${r.added} new, skipped ${r.skipped} existing`);
+    if (r.total === 0) {
+      toast('No files found in repo (check console)', true);
+    } else {
+      toast(`Found ${r.total}, pulled ${r.added} new, skipped ${r.skipped}`);
+    }
     updateCount();
     renderSettings();
   } catch (err) {
