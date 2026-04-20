@@ -572,6 +572,7 @@
     <img id="modal-img" style="display:none">
     <dl class="kv" id="modal-kv"></dl>
     <div class="buttons">
+      <button class="primary" id="modal-edit">Edit</button>
       <button class="secondary" id="modal-close">Close</button>
       <button class="danger" id="modal-delete">Delete</button>
     </div>
@@ -1017,12 +1018,87 @@ fileInput.addEventListener('change', async (e) => {
   fileDrop.classList.add('has-file');
 });
 
+// Edit mode state: if non-null, saveBtn updates existing session instead of creating new
+let editingSessionId = null;
+const cancelEditBtn = document.createElement('button');
+cancelEditBtn.className = 'secondary';
+cancelEditBtn.textContent = 'Cancel Edit';
+cancelEditBtn.style.marginTop = '10px';
+cancelEditBtn.style.display = 'none';
+cancelEditBtn.addEventListener('click', () => {
+  editingSessionId = null;
+  resetForm();
+  saveBtn.textContent = 'Save Session';
+  cancelEditBtn.style.display = 'none';
+});
+saveBtn.parentNode.insertBefore(cancelEditBtn, saveBtn.nextSibling);
+
+async function loadSessionIntoForm(id) {
+  const s = await getSession(id);
+  if (!s) { toast('Session not found', true); return; }
+  editingSessionId = id;
+  sessionType.value = s.type || '4x4';
+  otherWrap.style.display = s.type === 'other' ? 'block' : 'none';
+  otherDesc.value = s.otherDesc || '';
+  dateInput.value = s.date;
+  // Resolve equipment (with legacy fallback)
+  const eq = s.equipment || (s.treadmill ? 'home_treadmill' : 'outdoor');
+  currentEquipment = eq;
+  equipmentBtns.forEach(b => b.classList.toggle('active', b.dataset.equipment === eq));
+  showFieldsForEquipment(eq);
+  // Fields
+  distanceInput.value = '';
+  speedInput.value = '';
+  notesInput.value = '';
+  outdoorHours.value = '';
+  outdoorMins.value = '';
+  outdoorDistance.value = '';
+  outdoorSpeedHint.classList.remove('show');
+  if (eq === 'outdoor') {
+    if (s.durationMinutes != null) {
+      outdoorHours.value = Math.floor(s.durationMinutes / 60) || '';
+      outdoorMins.value = Math.round(s.durationMinutes - Math.floor(s.durationMinutes / 60) * 60) || '';
+    }
+    if (s.distanceKm != null) outdoorDistance.value = s.distanceKm;
+    computeOutdoorSpeed();
+  } else if (eq === 'home_treadmill' || eq === 'gym_treadmill') {
+    if (s.distanceKm != null) distanceInput.value = s.distanceKm;
+    if (s.avgSpeedKmh != null) speedInput.value = s.avgSpeedKmh;
+  } else if (eq === 'gym_assault_runner') {
+    if (s.workoutNotes) notesInput.value = s.workoutNotes;
+  }
+  // Existing image preview
+  if (s.imageDataUrl) {
+    preview.src = s.imageDataUrl;
+    preview.style.display = 'block';
+    fileText.textContent = '(existing screenshot, tap to replace)';
+    fileDrop.classList.add('has-file');
+    currentFileBlob = null;  // only set if user picks a new file
+  } else {
+    preview.style.display = 'none';
+    preview.src = '';
+    fileText.textContent = 'Tap to add screenshot';
+    fileDrop.classList.remove('has-file');
+    currentFileBlob = null;
+  }
+  saveBtn.textContent = 'Update Session';
+  cancelEditBtn.style.display = 'block';
+  // Switch to Log tab and scroll to top
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelector('.tab[data-view="log"]').classList.add('active');
+  document.getElementById('view-log').classList.add('active');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 saveBtn.addEventListener('click', async () => {
   saveBtn.disabled = true;
   try {
     const type = sessionType.value;
+    const isEdit = editingSessionId !== null;
+    const existing = isEdit ? await getSession(editingSessionId) : null;
     const session = {
-      id: uid(),
+      id: isEdit ? editingSessionId : uid(),
       type,
       typeLabel: SESSION_LABELS[type].label,
       otherDesc: type === 'other' ? (otherDesc.value.trim() || null) : null,
@@ -1033,7 +1109,7 @@ saveBtn.addEventListener('click', async () => {
       avgSpeedKmh: null,
       durationMinutes: null,
       workoutNotes: null,
-      createdAt: new Date().toISOString(),
+      createdAt: isEdit && existing ? existing.createdAt : new Date().toISOString(),
     };
 
     if (currentEquipment === 'outdoor') {
@@ -1057,10 +1133,23 @@ saveBtn.addEventListener('click', async () => {
       session.imageDataUrl = await blobToDataURL(currentFileBlob);
       session.imageSize = currentFileBlob.size;
       session.imageType = currentFileBlob.type;
+    } else if (isEdit && existing && existing.imageDataUrl) {
+      // Keep existing image if editing and no new file picked
+      session.imageDataUrl = existing.imageDataUrl;
+      session.imageSize = existing.imageSize;
+      session.imageType = existing.imageType;
+    }
+
+    // When editing, clear the syncedAt so the sync pushes the update to GitHub
+    if (isEdit) {
+      session.syncedAt = null;
     }
 
     await putSession(session);
-    toast('Logged ✓');
+    toast(isEdit ? 'Updated ✓' : 'Logged ✓');
+    editingSessionId = null;
+    saveBtn.textContent = 'Save Session';
+    cancelEditBtn.style.display = 'none';
     resetForm();
     updateCount();
 
@@ -1161,8 +1250,16 @@ const modalTitle = document.getElementById('modal-title');
 const modalImg = document.getElementById('modal-img');
 const modalKv = document.getElementById('modal-kv');
 const modalClose = document.getElementById('modal-close');
+const modalEdit = document.getElementById('modal-edit');
 const modalDelete = document.getElementById('modal-delete');
 let currentModalId = null;
+
+modalEdit.addEventListener('click', async () => {
+  if (!currentModalId) return;
+  const id = currentModalId;
+  modalBg.classList.remove('show');
+  await loadSessionIntoForm(id);
+});
 
 async function openModal(id) {
   const s = await getSession(id);
