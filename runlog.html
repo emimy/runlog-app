@@ -1,0 +1,1283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RunLog">
+<meta name="theme-color" content="#0a0a0a">
+<title>RunLog</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg: #0a0a0a;
+    --surface: #151515;
+    --surface-2: #1f1f1f;
+    --border: #2a2a2a;
+    --text: #e8e8e8;
+    --text-dim: #888;
+    --accent: #4ade80;
+    --accent-dim: #22c55e;
+    --danger: #ef4444;
+    --warn: #f59e0b;
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.4;
+    overscroll-behavior-y: contain;
+    min-height: 100vh;
+  }
+  body {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    max-width: 640px;
+    margin: 0 auto;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+  header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  header .count {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky;
+    top: 53px;
+    z-index: 9;
+  }
+  .tab {
+    flex: 1;
+    padding: 14px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  main {
+    padding: 16px;
+    padding-bottom: 80px;
+  }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* form */
+  .field {
+    margin-bottom: 18px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  input[type="text"], input[type="number"], input[type="date"], select, textarea {
+    width: 100%;
+    padding: 12px 14px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 16px;
+    font-family: inherit;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  select {
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3e%3cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 38px;
+  }
+  textarea {
+    resize: vertical;
+    min-height: 70px;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .toggle-row .toggle-label {
+    font-size: 15px;
+    color: var(--text);
+    font-weight: 400;
+  }
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 26px;
+    cursor: pointer;
+  }
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+  }
+  .slider {
+    position: absolute; inset: 0;
+    background: var(--border);
+    border-radius: 26px;
+    transition: background 0.2s;
+  }
+  .slider::before {
+    content: "";
+    position: absolute;
+    width: 20px; height: 20px;
+    left: 3px; top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(18px); }
+
+  .treadmill-fields {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease;
+  }
+  .treadmill-fields.open { max-height: 200px; margin-top: 18px; }
+
+  /* file upload */
+  .file-drop {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 24px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .file-drop:hover, .file-drop.has-file { border-color: var(--accent); }
+  .file-drop .icon { font-size: 32px; margin-bottom: 8px; opacity: 0.7; }
+  .file-drop .text { font-size: 14px; color: var(--text-dim); }
+  .file-drop.has-file .text { color: var(--accent); }
+  .file-drop input { display: none; }
+  .preview-img {
+    margin-top: 10px;
+    max-height: 200px;
+    border-radius: 8px;
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* buttons */
+  button.primary, button.secondary, button.danger {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  button.primary { background: var(--accent); color: #052e16; }
+  button.primary:active { background: var(--accent-dim); }
+  button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary { background: var(--surface-2); color: var(--text); }
+  button.secondary:active { background: var(--border); }
+  button.danger { background: var(--danger); color: #fff; }
+
+  /* toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--accent);
+    color: #052e16;
+    padding: 12px 20px;
+    border-radius: 24px;
+    font-weight: 600;
+    font-size: 14px;
+    opacity: 0;
+    transition: transform 0.25s, opacity 0.25s;
+    z-index: 100;
+    pointer-events: none;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  .toast.error { background: var(--danger); color: #fff; }
+
+  /* log list */
+  .entry {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 10px;
+    cursor: pointer;
+  }
+  .entry .top-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .entry .session-badge {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .entry .session-badge.hard { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
+  .entry .session-badge.moderate { background: rgba(245, 158, 11, 0.15); color: #fcd34d; }
+  .entry .session-badge.easy { background: rgba(74, 222, 128, 0.15); color: #86efac; }
+  .entry .date { font-size: 13px; color: var(--text-dim); }
+  .entry .details { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; color: var(--text-dim); margin-bottom: 10px; }
+  .entry .details strong { color: var(--text); font-weight: 500; }
+  .entry .thumb {
+    width: 100%;
+    max-height: 120px;
+    object-fit: cover;
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-dim);
+  }
+  .empty-state .icon { font-size: 40px; margin-bottom: 12px; opacity: 0.4; }
+
+  /* modal */
+  .modal-bg {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.8);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    padding: 16px;
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    max-width: 100%;
+    max-height: 90vh;
+    width: 500px;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  .modal h2 { font-size: 18px; margin-bottom: 14px; }
+  .modal img { max-width: 100%; border-radius: 8px; margin-bottom: 14px; }
+  .modal .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin-bottom: 14px; font-size: 14px; }
+  .modal .kv dt { color: var(--text-dim); }
+  .modal .buttons { display: flex; gap: 10px; flex-direction: column; }
+
+  /* settings */
+  .settings-group {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .settings-group h3 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+  .settings-group p {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    line-height: 1.5;
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-row .label { color: var(--text-dim); }
+  .stat-row .value { font-weight: 500; }
+
+  .btn-spacer { height: 10px; }
+
+  @media (max-width: 380px) {
+    header h1 { font-size: 18px; }
+    .tab { font-size: 13px; padding: 12px 8px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>RunLog</h1>
+  <span class="count" id="entry-count">0 sessions</span>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-view="log">Log</button>
+  <button class="tab" data-view="list">History</button>
+  <button class="tab" data-view="settings">Sync</button>
+</nav>
+
+<main>
+  <!-- LOG VIEW -->
+  <section class="view active" id="view-log">
+    <div class="field">
+      <label for="session-type">Session Type</label>
+      <select id="session-type">
+        <option value="4x4">4×4 intervals</option>
+        <option value="z2">Z2 easy</option>
+        <option value="hwpo_intervals">HWPO intervals</option>
+        <option value="gps_outdoor">Outdoor GPS</option>
+        <option value="long_run">Long run</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+
+    <div class="field" id="other-wrap" style="display:none">
+      <label for="other-desc">Describe Session</label>
+      <input type="text" id="other-desc" placeholder="e.g. recovery jog, fartlek, time trial">
+    </div>
+
+    <div class="field">
+      <label for="session-date">Date</label>
+      <input type="date" id="session-date">
+    </div>
+
+    <div class="field">
+      <div class="toggle-row">
+        <span class="toggle-label">Treadmill?</span>
+        <label class="switch" for="treadmill-toggle">
+          <input type="checkbox" id="treadmill-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="treadmill-fields" id="treadmill-fields">
+        <div class="row-2">
+          <div>
+            <label for="distance">Distance (km)</label>
+            <input type="number" id="distance" step="0.01" inputmode="decimal" placeholder="6.50">
+          </div>
+          <div>
+            <label for="speed">Avg Speed (km/h)</label>
+            <input type="number" id="speed" step="0.1" inputmode="decimal" placeholder="8.5">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Whoop Screenshot</label>
+      <div class="file-drop" id="file-drop">
+        <div class="icon">📸</div>
+        <div class="text" id="file-text">Tap to add screenshot</div>
+        <input type="file" id="screenshot" accept="image/*">
+        <img class="preview-img" id="preview" style="display:none">
+      </div>
+    </div>
+
+    <button class="primary" id="save-btn">Save Session</button>
+  </section>
+
+  <!-- HISTORY VIEW -->
+  <section class="view" id="view-list">
+    <div id="entries-container"></div>
+    <div class="empty-state" id="empty-state" style="display:none">
+      <div class="icon">📊</div>
+      <div>No sessions logged yet.</div>
+    </div>
+  </section>
+
+  <!-- SETTINGS VIEW -->
+  <section class="view" id="view-settings">
+    <div class="settings-group">
+      <h3>GitHub Sync</h3>
+      <p id="sync-status-text">Not configured. Sync will write each session as a JSON file to your private repo.</p>
+      <div class="field">
+        <label for="gh-owner">GitHub Username</label>
+        <input type="text" id="gh-owner" placeholder="yourusername" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="gh-repo">Repository Name</label>
+        <input type="text" id="gh-repo" placeholder="runlog-data" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="gh-token">Personal Access Token</label>
+        <input type="password" id="gh-token" placeholder="github_pat_..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </div>
+      <button class="primary" id="gh-save-btn">Save & Test Connection</button>
+      <div class="btn-spacer"></div>
+      <button class="secondary" id="gh-sync-btn" disabled>Sync Now</button>
+      <div class="btn-spacer"></div>
+      <button class="secondary" id="gh-pull-btn" disabled>Pull from GitHub</button>
+      <div class="btn-spacer"></div>
+      <button class="secondary" id="gh-clear-btn" style="display:none">Remove GitHub Config</button>
+    </div>
+
+    <div class="settings-group">
+      <h3>Storage</h3>
+      <div class="stat-row"><span class="label">Sessions logged</span><span class="value" id="stat-count">0</span></div>
+      <div class="stat-row"><span class="label">Synced to GitHub</span><span class="value" id="stat-synced">—</span></div>
+      <div class="stat-row"><span class="label">Storage used</span><span class="value" id="stat-size">0 KB</span></div>
+      <div class="stat-row"><span class="label">Storage quota</span><span class="value" id="stat-quota">—</span></div>
+    </div>
+
+    <div class="settings-group">
+      <h3>Manual Export</h3>
+      <p>Downloads all sessions as a single JSON file with images embedded. Useful as a one-off backup or for dropping into your Claude project for analysis.</p>
+      <button class="primary" id="export-btn">Export All (JSON)</button>
+      <div class="btn-spacer"></div>
+      <button class="secondary" id="export-csv-btn">Export CSV (no images)</button>
+    </div>
+
+    <div class="settings-group">
+      <h3>Import</h3>
+      <p>Restore from a previously exported JSON file. Duplicates are skipped by ID.</p>
+      <input type="file" id="import-file" accept="application/json" style="display:none">
+      <button class="secondary" id="import-btn">Import JSON</button>
+    </div>
+
+    <div class="settings-group">
+      <h3>Tips</h3>
+      <p><strong>Add to Home Screen:</strong> in Safari, tap Share → "Add to Home Screen". Run the app from there for fullscreen mode and better storage persistence.</p>
+      <p><strong>GitHub sync is your backup:</strong> once configured, every saved session pushes to your private repo automatically. iOS can clear site storage under pressure, but GitHub is durable.</p>
+    </div>
+
+    <div class="settings-group">
+      <h3>Danger Zone</h3>
+      <p>Permanently delete all sessions. This cannot be undone. Export first.</p>
+      <button class="danger" id="clear-btn">Delete All Sessions</button>
+    </div>
+  </section>
+</main>
+
+<!-- DETAIL MODAL -->
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <h2 id="modal-title">Session</h2>
+    <img id="modal-img" style="display:none">
+    <dl class="kv" id="modal-kv"></dl>
+    <div class="buttons">
+      <button class="secondary" id="modal-close">Close</button>
+      <button class="danger" id="modal-delete">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// IndexedDB setup
+// ============================================================
+const DB_NAME = 'runlog-db';
+const DB_VERSION = 2;
+const STORE = 'sessions';
+const CONFIG_STORE = 'config';
+let db;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains(STORE)) {
+        const store = d.createObjectStore(STORE, { keyPath: 'id' });
+        store.createIndex('date', 'date', { unique: false });
+      }
+      if (!d.objectStoreNames.contains(CONFIG_STORE)) {
+        d.createObjectStore(CONFIG_STORE, { keyPath: 'key' });
+      }
+    };
+    req.onsuccess = () => { db = req.result; resolve(db); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function tx(mode = 'readonly') {
+  return db.transaction(STORE, mode).objectStore(STORE);
+}
+
+function cfgTx(mode = 'readonly') {
+  return db.transaction(CONFIG_STORE, mode).objectStore(CONFIG_STORE);
+}
+
+function getConfig(key) {
+  return new Promise((resolve, reject) => {
+    const req = cfgTx().get(key);
+    req.onsuccess = () => resolve(req.result ? req.result.value : null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function setConfig(key, value) {
+  return new Promise((resolve, reject) => {
+    const req = cfgTx('readwrite').put({ key, value });
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function deleteConfig(key) {
+  return new Promise((resolve, reject) => {
+    const req = cfgTx('readwrite').delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function putSession(session) {
+  return new Promise((resolve, reject) => {
+    const req = tx('readwrite').put(session);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function getAllSessions() {
+  return new Promise((resolve, reject) => {
+    const req = tx().getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function getSession(id) {
+  return new Promise((resolve, reject) => {
+    const req = tx().get(id);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function deleteSession(id) {
+  return new Promise((resolve, reject) => {
+    const req = tx('readwrite').delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function clearAll() {
+  return new Promise((resolve, reject) => {
+    const req = tx('readwrite').clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function toast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => { t.className = 'toast' + (isError ? ' error' : ''); }, 2200);
+}
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+const SESSION_LABELS = {
+  '4x4':            { label: '4×4',           intensity: 'hard' },
+  'z2':             { label: 'Z2',            intensity: 'easy' },
+  'hwpo_intervals': { label: 'HWPO',          intensity: 'hard' },
+  'gps_outdoor':    { label: 'GPS',           intensity: 'easy' },
+  'long_run':       { label: 'Long',          intensity: 'moderate' },
+  'other':          { label: 'Other',         intensity: 'moderate' },
+};
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+function dataURLToBlob(dataUrl) {
+  const [meta, b64] = dataUrl.split(',');
+  const mime = meta.match(/:(.*?);/)[1];
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// ============================================================
+// GitHub sync
+// ============================================================
+let ghConfig = null;  // { owner, repo, token }
+
+async function loadGhConfig() {
+  ghConfig = await getConfig('github');
+  return ghConfig;
+}
+
+function ghHeaders() {
+  return {
+    'Authorization': `Bearer ${ghConfig.token}`,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+}
+
+async function ghTestConnection(cfg) {
+  const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}`;
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${cfg.token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (res.status === 404) throw new Error('Repo not found — check owner and repo name, and that the token has access');
+  if (res.status === 401) throw new Error('Invalid token — check the PAT');
+  if (res.status === 403) throw new Error('Token lacks permission for this repo');
+  if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+  const data = await res.json();
+  if (!data.permissions || !data.permissions.push) {
+    throw new Error('Token has read-only access. Needs "Contents: Read and write"');
+  }
+  return data;
+}
+
+function sessionFilePath(session) {
+  return `sessions/${session.date}-${session.id}.json`;
+}
+
+async function ghGetFileSha(path) {
+  const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${path}`;
+  const res = await fetch(url, { headers: ghHeaders() });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Get ${path}: ${res.status}`);
+  const data = await res.json();
+  return data.sha;
+}
+
+// UTF-8 safe base64 (JSON may contain non-ASCII chars)
+function utf8ToBase64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function base64ToUtf8(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+async function ghPutSession(session) {
+  const path = sessionFilePath(session);
+  const content = utf8ToBase64(JSON.stringify(session, null, 2));
+  const existingSha = await ghGetFileSha(path);
+  const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${path}`;
+  const body = {
+    message: `log: ${session.typeLabel} on ${session.date}`,
+    content,
+  };
+  if (existingSha) body.sha = existingSha;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`PUT ${path}: ${res.status} ${err.slice(0, 100)}`);
+  }
+  return true;
+}
+
+async function ghListSessions() {
+  const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/sessions`;
+  const res = await fetch(url, { headers: ghHeaders() });
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`List sessions: ${res.status}`);
+  const files = await res.json();
+  return files.filter(f => f.name.endsWith('.json'));
+}
+
+async function ghFetchSession(file) {
+  const res = await fetch(file.download_url, { headers: ghHeaders() });
+  if (!res.ok) throw new Error(`Fetch ${file.name}: ${res.status}`);
+  return res.json();
+}
+
+async function syncSessionToGh(session) {
+  if (!ghConfig) return { skipped: true };
+  try {
+    await ghPutSession(session);
+    session.syncedAt = new Date().toISOString();
+    await putSession(session);
+    return { ok: true };
+  } catch (err) {
+    console.warn('Sync failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function syncAllUnsynced() {
+  if (!ghConfig) throw new Error('Not configured');
+  const all = await getAllSessions();
+  const pending = all.filter(s => !s.syncedAt);
+  let ok = 0, failed = 0;
+  for (const s of pending) {
+    const r = await syncSessionToGh(s);
+    if (r.ok) ok++; else failed++;
+  }
+  return { total: pending.length, ok, failed };
+}
+
+async function pullFromGh() {
+  if (!ghConfig) throw new Error('Not configured');
+  const files = await ghListSessions();
+  const local = await getAllSessions();
+  const localIds = new Set(local.map(s => s.id));
+  let added = 0, skipped = 0;
+  for (const f of files) {
+    try {
+      const session = await ghFetchSession(f);
+      if (!session.id) continue;
+      if (localIds.has(session.id)) { skipped++; continue; }
+      session.syncedAt = new Date().toISOString();
+      await putSession(session);
+      added++;
+    } catch (err) {
+      console.warn('Failed to pull', f.name, err);
+    }
+  }
+  return { total: files.length, added, skipped };
+}
+
+// ============================================================
+// Tabs
+// ============================================================
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('view-' + tab.dataset.view).classList.add('active');
+    if (tab.dataset.view === 'list') renderList();
+    if (tab.dataset.view === 'settings') renderSettings();
+  });
+});
+
+// ============================================================
+// Log form
+// ============================================================
+const sessionType = document.getElementById('session-type');
+const otherWrap = document.getElementById('other-wrap');
+const otherDesc = document.getElementById('other-desc');
+const dateInput = document.getElementById('session-date');
+const treadmillToggle = document.getElementById('treadmill-toggle');
+const treadmillFields = document.getElementById('treadmill-fields');
+const distanceInput = document.getElementById('distance');
+const speedInput = document.getElementById('speed');
+const fileDrop = document.getElementById('file-drop');
+const fileInput = document.getElementById('screenshot');
+const fileText = document.getElementById('file-text');
+const preview = document.getElementById('preview');
+const saveBtn = document.getElementById('save-btn');
+
+// Default to today
+dateInput.value = new Date().toISOString().slice(0, 10);
+
+sessionType.addEventListener('change', () => {
+  otherWrap.style.display = sessionType.value === 'other' ? 'block' : 'none';
+});
+
+treadmillToggle.addEventListener('change', () => {
+  treadmillFields.classList.toggle('open', treadmillToggle.checked);
+});
+
+fileDrop.addEventListener('click', () => fileInput.click());
+
+let currentFileBlob = null;
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  currentFileBlob = file;
+  const dataUrl = await blobToDataURL(file);
+  preview.src = dataUrl;
+  preview.style.display = 'block';
+  fileText.textContent = file.name + ' (' + fmtBytes(file.size) + ')';
+  fileDrop.classList.add('has-file');
+});
+
+saveBtn.addEventListener('click', async () => {
+  saveBtn.disabled = true;
+  try {
+    const type = sessionType.value;
+    const session = {
+      id: uid(),
+      type,
+      typeLabel: SESSION_LABELS[type].label,
+      otherDesc: type === 'other' ? (otherDesc.value.trim() || null) : null,
+      date: dateInput.value,
+      treadmill: treadmillToggle.checked,
+      distanceKm: treadmillToggle.checked && distanceInput.value ? parseFloat(distanceInput.value) : null,
+      avgSpeedKmh: treadmillToggle.checked && speedInput.value ? parseFloat(speedInput.value) : null,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (currentFileBlob) {
+      session.imageDataUrl = await blobToDataURL(currentFileBlob);
+      session.imageSize = currentFileBlob.size;
+      session.imageType = currentFileBlob.type;
+    }
+
+    await putSession(session);
+    toast('Logged ✓');
+    resetForm();
+    updateCount();
+
+    // Auto-sync to GitHub if configured
+    if (ghConfig) {
+      const result = await syncSessionToGh(session);
+      if (result.ok) toast('Synced to GitHub ✓');
+      else if (!result.skipped) toast('Local save ok, sync failed', true);
+    }
+  } catch (err) {
+    console.error(err);
+    toast('Save failed: ' + err.message, true);
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+function resetForm() {
+  sessionType.value = '4x4';
+  otherWrap.style.display = 'none';
+  otherDesc.value = '';
+  dateInput.value = new Date().toISOString().slice(0, 10);
+  treadmillToggle.checked = false;
+  treadmillFields.classList.remove('open');
+  distanceInput.value = '';
+  speedInput.value = '';
+  fileInput.value = '';
+  currentFileBlob = null;
+  preview.style.display = 'none';
+  preview.src = '';
+  fileText.textContent = 'Tap to add screenshot';
+  fileDrop.classList.remove('has-file');
+}
+
+// ============================================================
+// History list
+// ============================================================
+async function renderList() {
+  const entries = await getAllSessions();
+  entries.sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+
+  const container = document.getElementById('entries-container');
+  const empty = document.getElementById('empty-state');
+
+  if (entries.length === 0) {
+    container.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+
+  empty.style.display = 'none';
+  container.innerHTML = entries.map(e => {
+    const meta = SESSION_LABELS[e.type] || SESSION_LABELS.other;
+    const details = [];
+    if (e.treadmill) {
+      if (e.distanceKm != null) details.push(`<strong>${e.distanceKm} km</strong>`);
+      if (e.avgSpeedKmh != null) details.push(`<strong>${e.avgSpeedKmh} km/h</strong>`);
+      details.push('treadmill');
+    } else {
+      details.push('outdoor');
+    }
+    const typeLabel = e.otherDesc ? `${meta.label}: ${e.otherDesc}` : meta.label;
+    return `
+      <div class="entry" data-id="${e.id}">
+        <div class="top-row">
+          <span class="session-badge ${meta.intensity}">${typeLabel}</span>
+          <span class="date">${e.date}</span>
+        </div>
+        <div class="details">${details.join(' · ')}</div>
+        ${e.imageDataUrl ? `<img class="thumb" src="${e.imageDataUrl}" loading="lazy">` : ''}
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.entry').forEach(el => {
+    el.addEventListener('click', () => openModal(el.dataset.id));
+  });
+}
+
+// ============================================================
+// Detail modal
+// ============================================================
+const modalBg = document.getElementById('modal-bg');
+const modalTitle = document.getElementById('modal-title');
+const modalImg = document.getElementById('modal-img');
+const modalKv = document.getElementById('modal-kv');
+const modalClose = document.getElementById('modal-close');
+const modalDelete = document.getElementById('modal-delete');
+let currentModalId = null;
+
+async function openModal(id) {
+  const s = await getSession(id);
+  if (!s) return;
+  currentModalId = id;
+  const meta = SESSION_LABELS[s.type] || SESSION_LABELS.other;
+  modalTitle.textContent = s.otherDesc ? `${meta.label}: ${s.otherDesc}` : meta.label;
+
+  if (s.imageDataUrl) {
+    modalImg.src = s.imageDataUrl;
+    modalImg.style.display = 'block';
+  } else {
+    modalImg.style.display = 'none';
+  }
+
+  const rows = [
+    ['Date', s.date],
+    ['Type', meta.label],
+  ];
+  if (s.otherDesc) rows.push(['Description', s.otherDesc]);
+  rows.push(['Treadmill', s.treadmill ? 'Yes' : 'No']);
+  if (s.distanceKm != null) rows.push(['Distance', s.distanceKm + ' km']);
+  if (s.avgSpeedKmh != null) rows.push(['Avg Speed', s.avgSpeedKmh + ' km/h']);
+  rows.push(['Logged at', new Date(s.createdAt).toLocaleString()]);
+
+  modalKv.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  modalBg.classList.add('show');
+}
+
+modalClose.addEventListener('click', () => modalBg.classList.remove('show'));
+modalBg.addEventListener('click', (e) => {
+  if (e.target === modalBg) modalBg.classList.remove('show');
+});
+modalDelete.addEventListener('click', async () => {
+  if (!currentModalId) return;
+  if (!confirm('Delete this session?')) return;
+  await deleteSession(currentModalId);
+  modalBg.classList.remove('show');
+  toast('Deleted');
+  updateCount();
+  renderList();
+});
+
+// ============================================================
+// Settings / export / import
+// ============================================================
+async function renderSettings() {
+  const entries = await getAllSessions();
+  document.getElementById('stat-count').textContent = entries.length;
+
+  const syncedCount = entries.filter(e => e.syncedAt).length;
+  const syncedEl = document.getElementById('stat-synced');
+  if (ghConfig) {
+    syncedEl.textContent = `${syncedCount} / ${entries.length}`;
+    syncedEl.style.color = syncedCount === entries.length ? 'var(--accent)' : 'var(--warn)';
+  } else {
+    syncedEl.textContent = '—';
+    syncedEl.style.color = '';
+  }
+
+  let total = 0;
+  entries.forEach(e => { if (e.imageSize) total += e.imageSize; });
+  total += entries.length * 200;
+  document.getElementById('stat-size').textContent = fmtBytes(total);
+
+  if (navigator.storage && navigator.storage.estimate) {
+    try {
+      const est = await navigator.storage.estimate();
+      document.getElementById('stat-quota').textContent =
+        fmtBytes(est.usage || 0) + ' / ' + fmtBytes(est.quota || 0);
+    } catch (e) {}
+  }
+
+  // GitHub sync section state
+  const statusText = document.getElementById('sync-status-text');
+  const ownerInput = document.getElementById('gh-owner');
+  const repoInput = document.getElementById('gh-repo');
+  const tokenInput = document.getElementById('gh-token');
+  const syncBtn = document.getElementById('gh-sync-btn');
+  const pullBtn = document.getElementById('gh-pull-btn');
+  const clearBtn = document.getElementById('gh-clear-btn');
+
+  if (ghConfig) {
+    ownerInput.value = ghConfig.owner;
+    repoInput.value = ghConfig.repo;
+    tokenInput.value = '';
+    tokenInput.placeholder = '•••••••• (stored, enter new to replace)';
+    const pending = entries.length - syncedCount;
+    statusText.innerHTML = pending === 0
+      ? `Connected to <strong>${ghConfig.owner}/${ghConfig.repo}</strong>. All sessions synced.`
+      : `Connected to <strong>${ghConfig.owner}/${ghConfig.repo}</strong>. ${pending} unsynced.`;
+    syncBtn.disabled = false;
+    pullBtn.disabled = false;
+    clearBtn.style.display = 'block';
+  } else {
+    ownerInput.value = '';
+    repoInput.value = '';
+    tokenInput.value = '';
+    tokenInput.placeholder = 'github_pat_...';
+    statusText.textContent = 'Not configured. Sync will write each session as a JSON file to your private repo.';
+    syncBtn.disabled = true;
+    pullBtn.disabled = true;
+    clearBtn.style.display = 'none';
+  }
+}
+
+document.getElementById('gh-save-btn').addEventListener('click', async () => {
+  const owner = document.getElementById('gh-owner').value.trim();
+  const repo = document.getElementById('gh-repo').value.trim();
+  const tokenField = document.getElementById('gh-token').value.trim();
+
+  if (!owner || !repo) return toast('Owner and repo required', true);
+
+  const token = tokenField || (ghConfig && ghConfig.token);
+  if (!token) return toast('Token required', true);
+
+  const btn = document.getElementById('gh-save-btn');
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Testing...';
+  try {
+    await ghTestConnection({ owner, repo, token });
+    await setConfig('github', { owner, repo, token });
+    ghConfig = { owner, repo, token };
+    toast('Connected ✓');
+    renderSettings();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+});
+
+document.getElementById('gh-sync-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('gh-sync-btn');
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Syncing...';
+  try {
+    const r = await syncAllUnsynced();
+    if (r.total === 0) toast('Nothing to sync');
+    else if (r.failed === 0) toast(`Synced ${r.ok} session${r.ok === 1 ? '' : 's'} ✓`);
+    else toast(`Synced ${r.ok}, ${r.failed} failed`, true);
+    renderSettings();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+});
+
+document.getElementById('gh-pull-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('gh-pull-btn');
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Pulling...';
+  try {
+    const r = await pullFromGh();
+    toast(`Pulled ${r.added} new, skipped ${r.skipped} existing`);
+    updateCount();
+    renderSettings();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+});
+
+document.getElementById('gh-clear-btn').addEventListener('click', async () => {
+  if (!confirm('Remove GitHub config? Data in the repo stays. You can reconfigure anytime.')) return;
+  await deleteConfig('github');
+  ghConfig = null;
+  toast('GitHub config removed');
+  renderSettings();
+});
+
+document.getElementById('export-btn').addEventListener('click', async () => {
+  const entries = await getAllSessions();
+  if (entries.length === 0) return toast('Nothing to export', true);
+  const payload = {
+    format: 'runlog-v1',
+    exportedAt: new Date().toISOString(),
+    sessionCount: entries.length,
+    sessions: entries,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `runlog-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`Exported ${entries.length} sessions`);
+});
+
+document.getElementById('export-csv-btn').addEventListener('click', async () => {
+  const entries = await getAllSessions();
+  if (entries.length === 0) return toast('Nothing to export', true);
+  entries.sort((a, b) => a.date.localeCompare(b.date));
+  const headers = ['date', 'type', 'type_label', 'other_desc', 'treadmill', 'distance_km', 'avg_speed_kmh', 'has_image', 'logged_at', 'id'];
+  const rows = entries.map(e => {
+    const meta = SESSION_LABELS[e.type] || SESSION_LABELS.other;
+    return [
+      e.date,
+      e.type,
+      meta.label,
+      e.otherDesc || '',
+      e.treadmill ? 'true' : 'false',
+      e.distanceKm != null ? e.distanceKm : '',
+      e.avgSpeedKmh != null ? e.avgSpeedKmh : '',
+      e.imageDataUrl ? 'true' : 'false',
+      e.createdAt,
+      e.id,
+    ].map(v => {
+      const s = String(v);
+      return s.includes(',') || s.includes('"') ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',');
+  });
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `runlog-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`Exported ${entries.length} rows`);
+});
+
+const importFile = document.getElementById('import-file');
+document.getElementById('import-btn').addEventListener('click', () => importFile.click());
+importFile.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    if (payload.format !== 'runlog-v1' || !Array.isArray(payload.sessions)) {
+      return toast('Not a valid RunLog export', true);
+    }
+    const existing = await getAllSessions();
+    const existingIds = new Set(existing.map(s => s.id));
+    let added = 0;
+    for (const s of payload.sessions) {
+      if (!existingIds.has(s.id)) {
+        await putSession(s);
+        added++;
+      }
+    }
+    toast(`Imported ${added} new sessions`);
+    updateCount();
+    renderSettings();
+  } catch (err) {
+    toast('Import failed: ' + err.message, true);
+  }
+  importFile.value = '';
+});
+
+document.getElementById('clear-btn').addEventListener('click', async () => {
+  if (!confirm('Delete ALL sessions? This cannot be undone.')) return;
+  if (!confirm('Really delete everything? Export first if you haven\'t.')) return;
+  await clearAll();
+  toast('All sessions deleted');
+  updateCount();
+  renderSettings();
+  renderList();
+});
+
+// ============================================================
+// Bootstrap
+// ============================================================
+async function updateCount() {
+  const entries = await getAllSessions();
+  document.getElementById('entry-count').textContent =
+    entries.length + ' session' + (entries.length === 1 ? '' : 's');
+}
+
+(async () => {
+  try {
+    await openDB();
+    await loadGhConfig();
+    // Request persistent storage so iOS/Safari is less eager to purge
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(() => {});
+    }
+    updateCount();
+  } catch (e) {
+    toast('Database error: ' + e.message, true);
+    console.error(e);
+  }
+})();
+</script>
+</body>
+</html>
