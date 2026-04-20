@@ -304,6 +304,57 @@
   .entry .session-badge.moderate { background: rgba(245, 158, 11, 0.15); color: #fcd34d; }
   .entry .session-badge.easy { background: rgba(74, 222, 128, 0.15); color: #86efac; }
   .entry .date { font-size: 13px; color: var(--text-dim); }
+  .entry .sync-indicator {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .entry .sync-ok       { background: rgba(74, 222, 128, 0.18); color: #4ade80; }
+  .entry .sync-pending  { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+  .entry .sync-failed   { background: rgba(239, 68, 68, 0.25);  color: #fca5a5; }
+  .entry .sync-local    { background: rgba(136, 136, 136, 0.15); color: #888; }
+  .entry .img-indicator { font-size: 12px; margin-left: 2px; }
+
+  .sync-banner {
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .sync-banner.warn {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fcd34d;
+  }
+  .sync-banner.err {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+  }
+  .sync-banner.ok {
+    background: rgba(74, 222, 128, 0.08);
+    border: 1px solid rgba(74, 222, 128, 0.2);
+    color: #86efac;
+  }
+  .sync-banner button {
+    margin-top: 8px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    color: inherit;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+  }
   .entry .details { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; color: var(--text-dim); margin-bottom: 10px; }
   .entry .details strong { color: var(--text); font-weight: 500; }
   .entry .thumb {
@@ -487,6 +538,7 @@
 
   <!-- HISTORY VIEW -->
   <section class="view" id="view-list">
+    <div id="sync-banner" class="sync-banner" style="display:none"></div>
     <div id="entries-container"></div>
     <div class="empty-state" id="empty-state" style="display:none">
       <div class="icon">📊</div>
@@ -876,26 +928,86 @@ async function ghFetchSession(file) {
   return res.json();
 }
 
-async function syncSessionToGh(session) {
+async function syncSessionToGh(sessionOrId) {
   if (!ghConfig) return { skipped: true };
+
+  // Always re-read from IndexedDB to ensure we're syncing the persisted state,
+  // not a potentially-stale in-memory object. Accept either a full session or just an id.
+  const id = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.id;
+  const persisted = await getSession(id);
+  if (!persisted) {
+    return { ok: false, error: 'Session not found in IndexedDB' };
+  }
+
   try {
-    await ghPutSession(session);
-    session.syncedAt = new Date().toISOString();
-    await putSession(session);
+    // Integrity check: if the in-memory session claimed to have an image but the
+    // persisted record doesn't, refuse to sync. This prevents silent image loss.
+    const inMemoryHasImage = typeof sessionOrId === 'object' && !!sessionOrId.imageDataUrl;
+    const persistedHasImage = !!persisted.imageDataUrl;
+    if (inMemoryHasImage && !persistedHasImage) {
+      console.error('[syncSessionToGh] Image present in memory but missing from IndexedDB — refusing to sync');
+      await markSyncState(id, 'failed', 'Image not persisted locally');
+      return { ok: false, error: 'Image not persisted locally, sync aborted' };
+    }
+
+    // Size sanity check: if the session has an image, the full JSON should be sizeable.
+    const payload = JSON.stringify(persisted, null, 2);
+    if (persistedHasImage && payload.length < 50000) {
+      console.error('[syncSessionToGh] Image field present but payload is suspiciously small:', payload.length);
+      await markSyncState(id, 'failed', 'Payload size check failed (image corrupted?)');
+      return { ok: false, error: 'Payload too small despite having image field' };
+    }
+
+    await ghPutSession(persisted);
+
+    // Re-fetch after write (in case the session was edited during the sync call)
+    const afterWrite = await getSession(id);
+    if (afterWrite) {
+      afterWrite.syncedAt = new Date().toISOString();
+      afterWrite.syncState = 'synced';
+      afterWrite.syncError = null;
+      await putSession(afterWrite);
+    }
     return { ok: true };
   } catch (err) {
     console.warn('Sync failed:', err);
+    await markSyncState(id, 'failed', err.message);
     return { ok: false, error: err.message };
   }
 }
 
+async function markSyncState(id, state, errorMsg) {
+  const s = await getSession(id);
+  if (!s) return;
+  s.syncState = state;
+  s.syncError = errorMsg || null;
+  await putSession(s);
+}
+
+window.retrySyncAll = async function() {
+  if (!ghConfig) { toast('GitHub not configured', true); return; }
+  toast('Retrying sync...');
+  try {
+    const r = await syncAllUnsynced();
+    if (r.failed === 0 && r.ok > 0) toast(`Synced ${r.ok} session${r.ok===1?'':'s'} ✓`);
+    else if (r.ok === 0 && r.failed === 0) toast('Nothing to sync');
+    else toast(`Synced ${r.ok}, ${r.failed} still failing`, r.failed > 0);
+    renderList();
+    renderSettings();
+    updateCount();
+  } catch (err) {
+    toast('Retry failed: ' + err.message, true);
+  }
+};
+
 async function syncAllUnsynced() {
   if (!ghConfig) throw new Error('Not configured');
   const all = await getAllSessions();
-  const pending = all.filter(s => !s.syncedAt);
+  // Retry pending, failed, and ones never marked. Don't re-push already-synced.
+  const pending = all.filter(s => !s.syncedAt || s.syncState === 'failed' || s.syncState === 'pending');
   let ok = 0, failed = 0;
   for (const s of pending) {
-    const r = await syncSessionToGh(s);
+    const r = await syncSessionToGh(s.id);
     if (r.ok) ok++; else failed++;
   }
   return { total: pending.length, ok, failed };
@@ -1157,7 +1269,19 @@ saveBtn.addEventListener('click', async () => {
       session.syncedAt = null;
     }
 
+    // Mark as pending before write so UI can show sync status
+    session.syncState = ghConfig ? 'pending' : 'local_only';
+    session.syncError = null;
+
     await putSession(session);
+
+    // Verify the write — confirm image is on disk before even attempting sync
+    const verify = await getSession(session.id);
+    if (session.imageDataUrl && (!verify || !verify.imageDataUrl)) {
+      toast('Image failed to save locally — aborting', true);
+      return;
+    }
+
     toast(isEdit ? 'Updated ✓' : 'Logged ✓');
     editingSessionId = null;
     saveBtn.textContent = 'Save Session';
@@ -1165,11 +1289,14 @@ saveBtn.addEventListener('click', async () => {
     resetForm();
     updateCount();
 
-    // Auto-sync to GitHub if configured
+    // Auto-sync to GitHub if configured — pass ID so sync re-reads from IDB
     if (ghConfig) {
-      const result = await syncSessionToGh(session);
+      const result = await syncSessionToGh(session.id);
       if (result.ok) toast('Synced to GitHub ✓');
-      else if (!result.skipped) toast('Local save ok, sync failed', true);
+      else if (!result.skipped) toast('Local save ok, sync failed: ' + (result.error || 'unknown'), true);
+      // refresh list view if user switched to it
+      const active = document.querySelector('.view.active');
+      if (active && active.id === 'view-list') renderList();
     }
   } catch (err) {
     console.error(err);
@@ -1213,6 +1340,26 @@ async function renderList() {
 
   const container = document.getElementById('entries-container');
   const empty = document.getElementById('empty-state');
+  const banner = document.getElementById('sync-banner');
+
+  // Sync status banner
+  if (ghConfig && entries.length > 0) {
+    const failed = entries.filter(e => e.syncState === 'failed').length;
+    const pending = entries.filter(e => e.syncState === 'pending' || (!e.syncedAt && e.syncState !== 'failed')).length;
+    if (failed > 0) {
+      banner.className = 'sync-banner err';
+      banner.innerHTML = `<strong>${failed} session${failed===1?'':'s'} failed to sync to GitHub.</strong> Data is safe locally but not backed up. <button onclick="retrySyncAll()">Retry all</button>`;
+      banner.style.display = 'block';
+    } else if (pending > 0) {
+      banner.className = 'sync-banner warn';
+      banner.innerHTML = `${pending} session${pending===1?' is':'s are'} not yet synced to GitHub. <button onclick="retrySyncAll()">Sync now</button>`;
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+  } else {
+    banner.style.display = 'none';
+  }
 
   if (entries.length === 0) {
     container.innerHTML = '';
@@ -1237,11 +1384,20 @@ async function renderList() {
     if (e.workoutNotes) details.push(e.workoutNotes.slice(0, 40) + (e.workoutNotes.length > 40 ? '…' : ''));
     details.push(EQUIPMENT_LABELS[eq] || eq);
     const typeLabel = e.otherDesc ? `${meta.label}: ${e.otherDesc}` : meta.label;
+    // Sync state indicator
+    const syncState = e.syncState || (e.syncedAt ? 'synced' : (ghConfig ? 'pending' : 'local_only'));
+    const syncIcon = {
+      'synced':     { char: '✓', cls: 'sync-ok',     title: 'Synced to GitHub' },
+      'pending':    { char: '⟳', cls: 'sync-pending',title: 'Pending sync to GitHub' },
+      'failed':     { char: '⚠', cls: 'sync-failed', title: e.syncError ? 'Sync failed: ' + e.syncError : 'Sync failed' },
+      'local_only': { char: '•', cls: 'sync-local',  title: 'Local only (GitHub not configured)' },
+    }[syncState] || { char: '?', cls: 'sync-unknown', title: 'Unknown sync state' };
+    const hasImage = !!e.imageDataUrl;
     return `
       <div class="entry" data-id="${e.id}">
         <div class="top-row">
           <span class="session-badge ${meta.intensity}">${typeLabel}</span>
-          <span class="date">${e.date}</span>
+          <span class="date">${e.date} <span class="sync-indicator ${syncIcon.cls}" title="${syncIcon.title}">${syncIcon.char}</span>${hasImage ? ' <span class="img-indicator" title="Has screenshot">📸</span>' : ''}</span>
         </div>
         <div class="details">${details.join(' · ')}</div>
         ${e.imageDataUrl ? `<img class="thumb" src="${e.imageDataUrl}" loading="lazy">` : ''}
