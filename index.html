@@ -712,6 +712,16 @@
     </div>
 
     <div class="settings-group">
+      <h3>Whoop Connection</h3>
+      <p id="whoop-status-text">Not connected. Connect to auto-inject zone data into new sessions.</p>
+      <button class="primary" id="whoop-connect-btn">Connect Whoop</button>
+      <div class="btn-spacer"></div>
+      <button class="secondary" id="whoop-test-btn" style="display:none">Test Connection</button>
+      <div class="btn-spacer"></div>
+      <button class="secondary" id="whoop-disconnect-btn" style="display:none">Disconnect Whoop</button>
+    </div>
+
+    <div class="settings-group">
       <h3>Storage</h3>
       <div class="stat-row"><span class="label">Sessions logged</span><span class="value" id="stat-count">0</span></div>
       <div class="stat-row"><span class="label">Synced to GitHub</span><span class="value" id="stat-synced">—</span></div>
@@ -1909,6 +1919,9 @@ async function renderSettings() {
     clearBtn.style.display = 'none';
     document.getElementById('auto-pull-row').style.display = 'none';
   }
+
+  // Whoop connection section — separate function defined in the Whoop module
+  renderWhoopSettings();
 }
 
 document.getElementById('auto-pull-toggle').addEventListener('change', async (e) => {
@@ -2508,6 +2521,225 @@ function renderCalibration(allRows, withWhoop) {
 }
 
 // ============================================================
+// Whoop OAuth (via Vercel broker)
+// ============================================================
+// The PWA uses an Authorization Code flow through a small Vercel function
+// (runlog-auth.vercel.app) that holds the Whoop CLIENT_SECRET. The flow:
+//
+//   1. User taps "Connect Whoop" → we redirect to Whoop's /oauth/authorize
+//      with a state param (CSRF protection) and the PWA URL as redirect_uri.
+//   2. User logs in, grants access. Whoop redirects back to the PWA with
+//      ?code=... in the URL.
+//   3. On PWA load we detect that query param, send the code to Vercel,
+//      receive access + refresh tokens, stash them in IndexedDB config store.
+//   4. When calling Whoop API, access token expires every ~1 hour; on 401
+//      we call Vercel /api/refresh to mint a new one.
+
+const WHOOP_AUTH_URL = 'https://api.prod.whoop.com/oauth/oauth2/auth';
+const WHOOP_SCOPES = 'offline read:workout read:recovery read:profile';
+const WHOOP_BROKER = 'https://runlog-auth.vercel.app';
+const WHOOP_CLIENT_ID_PUBLIC = 'fd3e38c4-95dc-4e86-8c7c-84d42ada7079';
+// CLIENT_ID is public by OAuth spec — only the SECRET must stay hidden.
+// Hardcoding it here is the normal pattern; it just identifies which app
+// is making the auth request.
+
+function whoopRedirectUri() {
+  // Derive the redirect URI from the PWA's current origin. This must match
+  // what's registered in Whoop's developer dashboard.
+  // For emimy.github.io/runlog-app/ this resolves to that exact URL.
+  const base = window.location.origin + window.location.pathname;
+  // Trim any trailing query string or hash; redirect_uri must match exactly.
+  return base.replace(/[?#].*$/, '');
+}
+
+let whoopTokens = null;  // in-memory copy; persisted in IndexedDB config
+
+async function loadWhoopTokens() {
+  whoopTokens = await getConfig('whoop');
+}
+
+async function saveWhoopTokens(tokens) {
+  // Normalize — Whoop returns expires_in (seconds). Store absolute expiry too.
+  const t = { ...tokens };
+  if (t.expires_in && !t.expires_at) {
+    t.expires_at = Date.now() + t.expires_in * 1000;
+  }
+  await setConfig('whoop', t);
+  whoopTokens = t;
+}
+
+async function clearWhoopTokens() {
+  await deleteConfig('whoop');
+  whoopTokens = null;
+}
+
+function whoopStartAuth() {
+  // CSRF protection: generate a random state, stash it, compare on return.
+  const state = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  sessionStorage.setItem('whoop_oauth_state', state);
+
+  const params = new URLSearchParams({
+    client_id: WHOOP_CLIENT_ID_PUBLIC,
+    redirect_uri: whoopRedirectUri(),
+    response_type: 'code',
+    scope: WHOOP_SCOPES,
+    state,
+  });
+  window.location.assign(`${WHOOP_AUTH_URL}?${params.toString()}`);
+}
+
+async function whoopHandleCallback() {
+  // Called on every PWA load. If we see ?code=... and ?state=..., complete
+  // the exchange via the Vercel broker, store tokens, clean up the URL.
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  if (!code || !state) return false;
+
+  const expectedState = sessionStorage.getItem('whoop_oauth_state');
+  if (state !== expectedState) {
+    toast('OAuth state mismatch — aborted', true);
+    // Still clean up the URL
+    history.replaceState({}, document.title, whoopRedirectUri());
+    return false;
+  }
+
+  try {
+    const res = await fetch(`${WHOOP_BROKER}/api/oauth-exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        redirect_uri: whoopRedirectUri(),
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      console.error('[whoop] oauth exchange failed:', err);
+      toast('Whoop auth failed: ' + res.status, true);
+      return false;
+    }
+    const tokens = await res.json();
+    if (!tokens.access_token) {
+      console.error('[whoop] exchange returned no access_token:', tokens);
+      toast('Whoop auth returned no token', true);
+      return false;
+    }
+    await saveWhoopTokens(tokens);
+    toast('Connected to Whoop ✓');
+    return true;
+  } catch (err) {
+    console.error('[whoop] callback error:', err);
+    toast('Whoop auth error: ' + err.message, true);
+    return false;
+  } finally {
+    sessionStorage.removeItem('whoop_oauth_state');
+    // Clean up the URL so a refresh doesn't re-enter the callback
+    history.replaceState({}, document.title, whoopRedirectUri());
+  }
+}
+
+async function whoopRefresh() {
+  if (!whoopTokens || !whoopTokens.refresh_token) return false;
+  try {
+    const res = await fetch(`${WHOOP_BROKER}/api/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: whoopTokens.refresh_token }),
+    });
+    if (!res.ok) {
+      console.error('[whoop] refresh failed:', res.status);
+      return false;
+    }
+    const tokens = await res.json();
+    if (!tokens.access_token) return false;
+    await saveWhoopTokens(tokens);
+    return true;
+  } catch (err) {
+    console.error('[whoop] refresh error:', err);
+    return false;
+  }
+}
+
+// Wrapper for calling Whoop API — auto-refreshes on 401 and retries once.
+async function whoopApi(path, params) {
+  if (!whoopTokens) throw new Error('Not connected to Whoop');
+  const doCall = async () => {
+    const url = new URL(`https://api.prod.whoop.com/developer/v2${path}`);
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v != null) url.searchParams.set(k, v);
+      }
+    }
+    return fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${whoopTokens.access_token}` },
+    });
+  };
+  let res = await doCall();
+  if (res.status === 401) {
+    const ok = await whoopRefresh();
+    if (!ok) throw new Error('Whoop token expired; reconnect required');
+    res = await doCall();
+  }
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Whoop API ${res.status}: ${txt.slice(0, 120)}`);
+  }
+  return res.json();
+}
+
+// UI wiring
+function renderWhoopSettings() {
+  const status = document.getElementById('whoop-status-text');
+  const connectBtn = document.getElementById('whoop-connect-btn');
+  const testBtn = document.getElementById('whoop-test-btn');
+  const disconnectBtn = document.getElementById('whoop-disconnect-btn');
+
+  if (whoopTokens && whoopTokens.access_token) {
+    const expiry = whoopTokens.expires_at
+      ? new Date(whoopTokens.expires_at).toLocaleString()
+      : 'unknown';
+    status.innerHTML = `Connected. Access token expires: ${expiry}. Refresh token stored.`;
+    connectBtn.style.display = 'none';
+    testBtn.style.display = 'block';
+    disconnectBtn.style.display = 'block';
+  } else {
+    status.textContent = 'Not connected. Connect to auto-inject zone data into new sessions.';
+    connectBtn.style.display = 'block';
+    testBtn.style.display = 'none';
+    disconnectBtn.style.display = 'none';
+  }
+}
+
+document.getElementById('whoop-connect-btn').addEventListener('click', () => {
+  whoopStartAuth();
+});
+
+document.getElementById('whoop-test-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('whoop-test-btn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  try {
+    const profile = await whoopApi('/user/profile/basic');
+    toast(`Hi ${profile.first_name} ✓`);
+  } catch (err) {
+    toast('Test failed: ' + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+});
+
+document.getElementById('whoop-disconnect-btn').addEventListener('click', async () => {
+  if (!confirm('Disconnect Whoop? Tokens will be removed from this device.')) return;
+  await clearWhoopTokens();
+  toast('Whoop disconnected');
+  renderWhoopSettings();
+});
+
+// ============================================================
 // Bootstrap
 // ============================================================
 async function updateCount() {
@@ -2520,6 +2752,11 @@ async function updateCount() {
   try {
     await openDB();
     await loadGhConfig();
+    await loadWhoopTokens();
+
+    // Handle OAuth callback if we landed here with ?code=...
+    await whoopHandleCallback();
+
     // Request persistent storage so iOS/Safari is less eager to purge
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(() => {});
