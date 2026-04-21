@@ -1154,6 +1154,61 @@ async function ghPutSession(session) {
   return true;
 }
 
+// Delete a session file from the GitHub repo.
+// Returns { ok: true } on success, { ok: true, notFound: true } if the file
+// wasn't there anyway, { ok: false, error } on other failures.
+// Uses the same Trees API fallback as ghPutSession because Contents API can
+// return stale sha.
+async function ghDeleteSession(session) {
+  const path = sessionFilePath(session);
+  const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${path}`;
+
+  // Need a sha to delete. Try Contents API first, fall back to Trees.
+  let sha = await ghGetFileSha(path);
+  if (!sha) sha = await ghGetFileShaViaTree(path);
+  if (!sha) {
+    // File isn't on GitHub — nothing to delete. Treat as success.
+    return { ok: true, notFound: true };
+  }
+
+  const body = {
+    message: `delete: ${session.typeLabel || session.type} on ${session.date}`,
+    sha,
+  };
+
+  const doRequest = async () => fetch(url, {
+    method: 'DELETE',
+    headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  let res = await doRequest();
+
+  // Handle stale sha same as PUT
+  if (res.status === 409 || res.status === 422) {
+    const errText = await res.text();
+    if (errText.toLowerCase().includes('sha') || res.status === 409) {
+      console.warn(`[ghDeleteSession] ${res.status} sha issue for ${path} — retrying via Trees API`);
+      const freshSha = await ghGetFileShaViaTree(path);
+      if (freshSha) {
+        body.sha = freshSha;
+        res = await doRequest();
+      }
+    }
+  }
+
+  if (res.status === 404) {
+    // Concurrent deletion or never existed. Treat as success.
+    return { ok: true, notFound: true };
+  }
+
+  if (!res.ok) {
+    const err = await res.text();
+    return { ok: false, error: `DELETE ${path}: ${res.status} ${err.slice(0, 100)}` };
+  }
+  return { ok: true };
+}
+
 async function ghListSessions() {
   const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/sessions`;
   console.log('[ghListSessions] GET', url);
@@ -1888,12 +1943,36 @@ modalBg.addEventListener('click', (e) => {
 });
 modalDelete.addEventListener('click', async () => {
   if (!currentModalId) return;
-  if (!confirm('Delete this session?')) return;
-  await deleteSession(currentModalId);
+  if (!confirm('Delete this session? This removes it locally AND from GitHub.')) return;
+  const id = currentModalId;
+  const session = await getSession(id);
+
+  // Delete locally first — user intent is explicit.
+  await deleteSession(id);
   modalBg.classList.remove('show');
-  toast('Deleted');
   updateCount();
   renderList();
+
+  // Delete on GitHub if configured and the session was likely pushed there.
+  // If the session was never synced (local_only), skip the GitHub call.
+  if (ghConfig && session && session.syncState !== 'local_only') {
+    try {
+      const result = await ghDeleteSession(session);
+      if (result.ok && result.notFound) {
+        toast('Deleted (wasn\'t on GitHub)');
+      } else if (result.ok) {
+        toast('Deleted from local and GitHub ✓');
+      } else {
+        toast('Deleted locally, GitHub delete failed: ' + (result.error || 'unknown'), true);
+        console.warn('[delete] GitHub delete failed:', result.error);
+      }
+    } catch (err) {
+      toast('Deleted locally, GitHub delete threw: ' + err.message, true);
+      console.error('[delete] GitHub delete threw:', err);
+    }
+  } else {
+    toast('Deleted');
+  }
 });
 
 // Match (or re-match) Whoop workout for the currently open session.
