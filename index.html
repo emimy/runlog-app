@@ -463,6 +463,111 @@
     header h1 { font-size: 18px; }
     .tab { font-size: 13px; padding: 12px 8px; }
   }
+
+  /* ============================================================
+     Analyze tab
+     ============================================================ */
+  .analyze-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .analyze-section h3 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+  .analyze-section h4 {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin: 16px 0 8px;
+  }
+  .analyze-section h4:first-of-type { margin-top: 0; }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .kpi {
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 12px 10px;
+    text-align: center;
+  }
+  .kpi .val {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.1;
+  }
+  .kpi .val.dim { color: var(--text-dim); }
+  .kpi .val.warn { color: var(--warn); }
+  .kpi .val.good { color: var(--accent); }
+  .kpi .lbl {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 4px;
+    line-height: 1.2;
+  }
+
+  .chart-wrap {
+    position: relative;
+    height: 240px;
+    margin-bottom: 4px;
+  }
+  .chart-note {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+
+  .analyze-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .analyze-table th, .analyze-table td {
+    padding: 8px 6px;
+    text-align: right;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .analyze-table th:first-child, .analyze-table td:first-child {
+    text-align: left;
+  }
+  .analyze-table th {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .analyze-table tr.highlight-mon td { color: #86efac; }
+  .analyze-table tr.highlight-thu td { color: #fca5a5; }
+  .table-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+
+  .empty-analyze {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
 </style>
 </head>
 <body>
@@ -474,6 +579,7 @@
 <nav class="tabs">
   <button class="tab active" data-view="log">Log</button>
   <button class="tab" data-view="list">History</button>
+  <button class="tab" data-view="analyze">Analyze</button>
   <button class="tab" data-view="settings">Sync</button>
 </nav>
 
@@ -640,6 +746,73 @@
       <button class="danger" id="clear-btn">Delete All Sessions</button>
     </div>
   </section>
+
+  <!-- ANALYZE VIEW -->
+  <section class="view" id="view-analyze">
+    <div class="analyze-section" id="analyze-summary">
+      <h3>This Week</h3>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="val" id="kpi-z5">–</div><div class="lbl">Z5 min</div></div>
+        <div class="kpi"><div class="val" id="kpi-hard">–</div><div class="lbl">hard sessions</div></div>
+        <div class="kpi"><div class="val" id="kpi-mins">–</div><div class="lbl">run minutes</div></div>
+      </div>
+    </div>
+
+    <div class="analyze-section">
+      <h3>Stimulus Quality</h3>
+
+      <h4>Z5 minutes per 4×4 session, by day of week</h4>
+      <div class="chart-wrap"><canvas id="chart-z5-bydow"></canvas></div>
+      <div class="chart-note" id="note-z5-bydow"></div>
+
+      <h4>Rolling 7-day Z5 total</h4>
+      <div class="chart-wrap"><canvas id="chart-z5-rolling"></canvas></div>
+
+      <h4>Sessions</h4>
+      <div class="table-scroll">
+        <table class="analyze-table" id="table-sessions">
+          <thead><tr>
+            <th>Date</th><th>Type</th><th>Min</th>
+            <th>Z5</th><th>Z4</th><th>Max HR</th><th>Strain</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="analyze-section">
+      <h3>Load &amp; Periodization</h3>
+
+      <h4>Weekly run minutes, stacked by zone</h4>
+      <div class="chart-wrap"><canvas id="chart-weekly-zones"></canvas></div>
+
+      <h4>Weekly strain from running</h4>
+      <div class="chart-wrap"><canvas id="chart-weekly-strain"></canvas></div>
+
+      <h4>Weekly intensity distribution (% time per zone)</h4>
+      <div class="chart-wrap"><canvas id="chart-weekly-pct"></canvas></div>
+      <div class="chart-note">Polarization check — high Z1/Z2 and Z4/Z5 with thin Z3 is the target.</div>
+    </div>
+
+    <div class="analyze-section">
+      <h3>Pace &amp; HR Calibration</h3>
+
+      <h4>Outdoor GPS: pace vs avg HR</h4>
+      <div class="chart-wrap"><canvas id="chart-gps-pace-hr"></canvas></div>
+      <div class="chart-note" id="note-gps"></div>
+
+      <h4>4×4 max HR over time</h4>
+      <div class="chart-wrap"><canvas id="chart-4x4-maxhr"></canvas></div>
+
+      <h4>Zone-2 drift detector</h4>
+      <div id="drift-list"></div>
+      <div class="chart-note">Sessions labelled Z2 where Z3+Z4 time exceeded 30% of duration.</div>
+    </div>
+
+    <div class="empty-analyze" id="analyze-empty" style="display:none">
+      No sessions yet with Whoop data. Log some runs and come back.
+    </div>
+  </section>
 </main>
 
 <!-- DETAIL MODAL -->
@@ -660,6 +833,8 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <script>
 // ============================================================
@@ -1080,6 +1255,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.getElementById('view-' + tab.dataset.view).classList.add('active');
     if (tab.dataset.view === 'list') renderList();
     if (tab.dataset.view === 'settings') renderSettings();
+    if (tab.dataset.view === 'analyze') renderAnalyze();
   });
 });
 
@@ -1762,6 +1938,386 @@ document.getElementById('clear-btn').addEventListener('click', async () => {
   renderSettings();
   renderList();
 });
+
+// ============================================================
+// Analyze tab
+// ============================================================
+const ZONE_COLORS = {
+  z1: '#3b3b3b',
+  z2: '#4ade80',
+  z3: '#f59e0b',
+  z4: '#ef4444',
+  z5: '#a855f7',
+};
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const analyzeCharts = {};
+
+function toMin(milli) { return (milli || 0) / 60000; }
+
+function normalize(session) {
+  const w = session._whoopData;
+  const type = session.type || 'other';
+  const date = session.date;
+  if (!date) return null;
+
+  const dObj = new Date(date + 'T12:00:00');
+  const dow = dObj.getDay();
+
+  let mins = session.durationMinutes != null ? Number(session.durationMinutes) : null;
+  let z1 = 0, z2 = 0, z3 = 0, z4 = 0, z5 = 0;
+  let maxHr = null, avgHr = null, strain = null;
+  const zd = w && w.zone_durations;
+
+  if (zd) {
+    z1 = toMin(zd.zone_one_milli);
+    z2 = toMin(zd.zone_two_milli);
+    z3 = toMin(zd.zone_three_milli);
+    z4 = toMin(zd.zone_four_milli);
+    z5 = toMin(zd.zone_five_milli);
+    if (mins == null) mins = z1 + z2 + z3 + z4 + z5 + toMin(zd.zone_zero_milli);
+    maxHr = w.max_heart_rate ?? null;
+    avgHr = w.average_heart_rate ?? null;
+    strain = w.strain ?? null;
+  }
+
+  return {
+    id: session.id,
+    date,
+    dow,
+    type,
+    equipment: session.equipment || (session.treadmill ? 'home_treadmill' : 'outdoor'),
+    distanceKm: session.distanceKm != null ? Number(session.distanceKm) : null,
+    avgSpeedKmh: session.avgSpeedKmh != null ? Number(session.avgSpeedKmh) : null,
+    mins: mins || 0,
+    z1, z2, z3, z4, z5,
+    maxHr, avgHr, strain,
+    hasWhoop: !!zd,
+  };
+}
+
+function isoWeekKey(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = new Date(target.getFullYear(), 0, 4);
+  const weekNum = 1 + Math.round(((target - firstThursday) / 86400000 - 3 + ((firstThursday.getDay() + 6) % 7)) / 7);
+  return `${target.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+function destroyCharts() {
+  Object.values(analyzeCharts).forEach(c => { try { c.destroy(); } catch (e) {} });
+  Object.keys(analyzeCharts).forEach(k => delete analyzeCharts[k]);
+}
+
+async function renderAnalyze() {
+  if (typeof Chart === 'undefined') {
+    const el = document.getElementById('analyze-empty');
+    el.textContent = 'Chart.js failed to load (offline?).';
+    el.style.display = 'block';
+    return;
+  }
+
+  const raw = await getAllSessions();
+  const rows = raw.map(normalize).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date));
+  const withWhoop = rows.filter(r => r.hasWhoop);
+
+  destroyCharts();
+
+  if (withWhoop.length === 0) {
+    document.getElementById('analyze-empty').style.display = 'block';
+    return;
+  }
+  document.getElementById('analyze-empty').style.display = 'none';
+
+  renderThisWeek(rows);
+  renderStimulusQuality(withWhoop);
+  renderLoad(withWhoop);
+  renderCalibration(rows, withWhoop);
+}
+
+function renderThisWeek(rows) {
+  const todayKey = isoWeekKey(new Date().toISOString().slice(0, 10));
+  const wk = rows.filter(r => isoWeekKey(r.date) === todayKey);
+  const z5 = wk.reduce((s, r) => s + r.z5, 0);
+  const mins = wk.reduce((s, r) => s + r.mins, 0);
+  const hardTypes = new Set(['4x4', 'hwpo_intervals', 'long_run']);
+  const hard = wk.filter(r => hardTypes.has(r.type)).length;
+
+  const z5El = document.getElementById('kpi-z5');
+  z5El.textContent = z5.toFixed(1);
+  z5El.className = 'val ' + (z5 >= 8 ? 'good' : z5 >= 4 ? '' : 'warn');
+
+  document.getElementById('kpi-hard').textContent = hard;
+  document.getElementById('kpi-mins').textContent = Math.round(mins);
+}
+
+function renderStimulusQuality(rows) {
+  const fourByFour = rows.filter(r => r.type === '4x4');
+
+  const byDow = {};
+  fourByFour.forEach(r => { (byDow[r.dow] = byDow[r.dow] || []).push(r); });
+  const datasets = Object.entries(byDow).map(([dow, arr]) => ({
+    label: DOW[dow] + ` (n=${arr.length})`,
+    data: arr.map(r => ({ x: r.date, y: r.z5 })),
+    backgroundColor:
+      dow === '1' ? '#4ade80' :
+      dow === '4' ? '#ef4444' :
+      '#888',
+    borderColor:
+      dow === '1' ? '#22c55e' :
+      dow === '4' ? '#b91c1c' :
+      '#666',
+    pointRadius: 6,
+    pointHoverRadius: 8,
+  }));
+  analyzeCharts.z5dow = new Chart(document.getElementById('chart-z5-bydow'), {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { type: 'category', ticks: { color: '#888', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#2a2a2a' } },
+        y: { beginAtZero: true, title: { display: true, text: 'Z5 min', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+      },
+      plugins: { legend: { labels: { color: '#e8e8e8', font: { size: 11 } } } },
+    },
+  });
+
+  const mon = fourByFour.filter(r => r.dow === 1);
+  const thu = fourByFour.filter(r => r.dow === 4);
+  const avg = arr => arr.length ? (arr.reduce((s, r) => s + r.z5, 0) / arr.length) : 0;
+  const note = document.getElementById('note-z5-bydow');
+  if (mon.length || thu.length) {
+    note.textContent = `Monday avg Z5: ${avg(mon).toFixed(1)} min (n=${mon.length}). ` +
+                       `Thursday avg Z5: ${avg(thu).toFixed(1)} min (n=${thu.length}).`;
+  } else {
+    note.textContent = '';
+  }
+
+  const byDate = {};
+  rows.forEach(r => { byDate[r.date] = (byDate[r.date] || 0) + r.z5; });
+  const allDates = Object.keys(byDate).sort();
+  if (allDates.length) {
+    const start = new Date(allDates[0] + 'T12:00:00');
+    const end = new Date(allDates[allDates.length - 1] + 'T12:00:00');
+    const days = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const rolling = days.map((dateStr, i) => {
+      let sum = 0;
+      for (let j = Math.max(0, i - 6); j <= i; j++) sum += (byDate[days[j]] || 0);
+      return sum;
+    });
+    analyzeCharts.z5rolling = new Chart(document.getElementById('chart-z5-rolling'), {
+      type: 'line',
+      data: {
+        labels: days,
+        datasets: [{
+          label: '7-day Z5 (min)',
+          data: rolling,
+          borderColor: '#a855f7',
+          backgroundColor: 'rgba(168, 85, 247, 0.15)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 0,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { ticks: { color: '#888', font: { size: 10 }, maxTicksLimit: 8 }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    });
+  }
+
+  const tbody = document.querySelector('#table-sessions tbody');
+  tbody.innerHTML = '';
+  const recent = [...rows].reverse().slice(0, 30);
+  for (const r of recent) {
+    const tr = document.createElement('tr');
+    if (r.type === '4x4' && r.dow === 1) tr.className = 'highlight-mon';
+    if (r.type === '4x4' && r.dow === 4) tr.className = 'highlight-thu';
+    tr.innerHTML = `
+      <td>${r.date.slice(5)} ${DOW[r.dow]}</td>
+      <td>${(SESSION_LABELS[r.type] || SESSION_LABELS.other).label}</td>
+      <td>${Math.round(r.mins)}</td>
+      <td>${r.z5.toFixed(1)}</td>
+      <td>${r.z4.toFixed(1)}</td>
+      <td>${r.maxHr ?? '–'}</td>
+      <td>${r.strain != null ? r.strain.toFixed(1) : '–'}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderLoad(rows) {
+  const byWeek = {};
+  rows.forEach(r => {
+    const k = isoWeekKey(r.date);
+    if (!byWeek[k]) byWeek[k] = { z1: 0, z2: 0, z3: 0, z4: 0, z5: 0, strain: 0, mins: 0 };
+    byWeek[k].z1 += r.z1;
+    byWeek[k].z2 += r.z2;
+    byWeek[k].z3 += r.z3;
+    byWeek[k].z4 += r.z4;
+    byWeek[k].z5 += r.z5;
+    byWeek[k].mins += r.mins;
+    if (r.strain != null) byWeek[k].strain += r.strain;
+  });
+  const weeks = Object.keys(byWeek).sort();
+  const zoneKeys = ['z1', 'z2', 'z3', 'z4', 'z5'];
+
+  analyzeCharts.weekzones = new Chart(document.getElementById('chart-weekly-zones'), {
+    type: 'bar',
+    data: {
+      labels: weeks,
+      datasets: zoneKeys.map(z => ({
+        label: z.toUpperCase(),
+        data: weeks.map(w => byWeek[w][z]),
+        backgroundColor: ZONE_COLORS[z],
+      })),
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { stacked: true, ticks: { color: '#888', font: { size: 10 } }, grid: { display: false } },
+        y: { stacked: true, ticks: { color: '#888' }, grid: { color: '#2a2a2a' }, title: { display: true, text: 'minutes', color: '#888' } },
+      },
+      plugins: { legend: { labels: { color: '#e8e8e8', font: { size: 11 } } } },
+    },
+  });
+
+  analyzeCharts.weekstrain = new Chart(document.getElementById('chart-weekly-strain'), {
+    type: 'bar',
+    data: {
+      labels: weeks,
+      datasets: [{
+        label: 'Total strain (running)',
+        data: weeks.map(w => byWeek[w].strain),
+        backgroundColor: '#4ade80',
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { color: '#888', font: { size: 10 } }, grid: { display: false } },
+        y: { ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+
+  analyzeCharts.weekpct = new Chart(document.getElementById('chart-weekly-pct'), {
+    type: 'bar',
+    data: {
+      labels: weeks,
+      datasets: zoneKeys.map(z => ({
+        label: z.toUpperCase(),
+        data: weeks.map(w => {
+          const total = zoneKeys.reduce((s, k) => s + byWeek[w][k], 0);
+          return total > 0 ? (byWeek[w][z] / total) * 100 : 0;
+        }),
+        backgroundColor: ZONE_COLORS[z],
+      })),
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { stacked: true, ticks: { color: '#888', font: { size: 10 } }, grid: { display: false } },
+        y: { stacked: true, ticks: { color: '#888', callback: v => v + '%' }, grid: { color: '#2a2a2a' }, max: 100 },
+      },
+      plugins: { legend: { labels: { color: '#e8e8e8', font: { size: 11 } } } },
+    },
+  });
+}
+
+function renderCalibration(allRows, withWhoop) {
+  const gps = withWhoop.filter(r =>
+    r.type === 'gps_outdoor' && r.equipment === 'outdoor' && r.avgSpeedKmh && r.avgHr);
+  analyzeCharts.gps = new Chart(document.getElementById('chart-gps-pace-hr'), {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        label: 'Outdoor runs',
+        data: gps.map(r => ({ x: r.avgSpeedKmh, y: r.avgHr, _date: r.date })),
+        backgroundColor: '#4ade80',
+        pointRadius: 6,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { title: { display: true, text: 'avg speed km/h', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+        y: { title: { display: true, text: 'avg HR bpm', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const p = ctx.raw;
+              return `${p._date}: ${p.x.toFixed(2)} km/h @ ${p.y} bpm`;
+            },
+          },
+        },
+      },
+    },
+  });
+  document.getElementById('note-gps').textContent =
+    gps.length < 3
+      ? `Only ${gps.length} outdoor GPS run${gps.length === 1 ? '' : 's'} logged. Calibration line needs more points.`
+      : `${gps.length} outdoor runs plotted.`;
+
+  const f = withWhoop.filter(r => r.type === '4x4' && r.maxHr);
+  analyzeCharts.maxhr = new Chart(document.getElementById('chart-4x4-maxhr'), {
+    type: 'line',
+    data: {
+      labels: f.map(r => r.date),
+      datasets: [{
+        label: '4×4 max HR',
+        data: f.map(r => r.maxHr),
+        borderColor: '#ef4444',
+        backgroundColor: 'rgba(239, 68, 68, 0.15)',
+        tension: 0.2,
+        pointRadius: 4,
+        pointBackgroundColor: f.map(r => r.dow === 1 ? '#4ade80' : r.dow === 4 ? '#ef4444' : '#888'),
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { color: '#888', font: { size: 10 }, maxTicksLimit: 8 }, grid: { display: false } },
+        y: { ticks: { color: '#888' }, grid: { color: '#2a2a2a' }, suggestedMin: 160, suggestedMax: 200 },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+
+  const z2sessions = withWhoop.filter(r => r.type === 'z2');
+  const drifters = z2sessions.filter(r => {
+    const total = r.z1 + r.z2 + r.z3 + r.z4 + r.z5;
+    if (total === 0) return false;
+    return ((r.z3 + r.z4) / total) > 0.30;
+  });
+  const list = document.getElementById('drift-list');
+  if (drifters.length === 0) {
+    list.innerHTML = `<div class="chart-note">Clean: ${z2sessions.length} Z2 session${z2sessions.length === 1 ? '' : 's'} logged, none exceeded the threshold.</div>`;
+  } else {
+    list.innerHTML = `<table class="analyze-table"><thead><tr>
+      <th>Date</th><th>Min</th><th>Z3+Z4 %</th><th>Max HR</th>
+    </tr></thead><tbody>` +
+      drifters.slice().reverse().map(r => {
+        const total = r.z1 + r.z2 + r.z3 + r.z4 + r.z5;
+        const pct = ((r.z3 + r.z4) / total) * 100;
+        return `<tr><td>${r.date.slice(5)} ${DOW[r.dow]}</td><td>${Math.round(r.mins)}</td><td>${pct.toFixed(0)}%</td><td>${r.maxHr ?? '–'}</td></tr>`;
+      }).join('') +
+      `</tbody></table>`;
+  }
+}
 
 // ============================================================
 // Bootstrap
