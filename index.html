@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+	<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -568,6 +568,130 @@
     color: var(--text-dim);
     font-size: 14px;
   }
+
+  /* Calendar */
+  .cal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .cal-header button {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .cal-header button:active {
+    background: var(--border);
+  }
+  .cal-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    padding: 8px 14px;
+    border-radius: 8px;
+  }
+  .cal-title:active {
+    background: var(--surface-2);
+  }
+  .cal-dow {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+  .cal-dow-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-dim);
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 4px 0;
+  }
+  .cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+  }
+  .cal-day {
+    aspect-ratio: 1;
+    background: var(--surface-2);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--text-dim);
+    position: relative;
+    cursor: default;
+  }
+  .cal-day.outside {
+    opacity: 0.3;
+  }
+  .cal-day.today {
+    border-color: var(--accent);
+  }
+  .cal-day.has-session {
+    cursor: pointer;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .cal-day.intensity-hard {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+  }
+  .cal-day.intensity-moderate {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fcd34d;
+  }
+  .cal-day.intensity-easy {
+    background: rgba(74, 222, 128, 0.2);
+    color: #86efac;
+  }
+  .cal-day.multi {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(74, 222, 128, 0.2));
+    color: var(--text);
+  }
+  .cal-day .cal-dot-row {
+    position: absolute;
+    bottom: 3px;
+    display: flex;
+    gap: 2px;
+  }
+  .cal-day .cal-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+  }
+  .cal-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .cal-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .cal-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }
 </style>
 </head>
 <body>
@@ -759,6 +883,29 @@
 
   <!-- ANALYZE VIEW -->
   <section class="view" id="view-analyze">
+    <div class="analyze-section" id="analyze-calendar">
+      <div class="cal-header">
+        <button id="cal-prev" aria-label="Previous month">‹</button>
+        <div class="cal-title" id="cal-title" role="button">Month</div>
+        <button id="cal-next" aria-label="Next month">›</button>
+      </div>
+      <div class="cal-dow">
+        <div class="cal-dow-label">Mon</div>
+        <div class="cal-dow-label">Tue</div>
+        <div class="cal-dow-label">Wed</div>
+        <div class="cal-dow-label">Thu</div>
+        <div class="cal-dow-label">Fri</div>
+        <div class="cal-dow-label">Sat</div>
+        <div class="cal-dow-label">Sun</div>
+      </div>
+      <div class="cal-grid" id="cal-grid"></div>
+      <div class="cal-legend">
+        <div class="cal-legend-item"><span class="cal-legend-swatch" style="background:rgba(239,68,68,0.5)"></span>Hard</div>
+        <div class="cal-legend-item"><span class="cal-legend-swatch" style="background:rgba(245,158,11,0.5)"></span>Moderate</div>
+        <div class="cal-legend-item"><span class="cal-legend-swatch" style="background:rgba(74,222,128,0.5)"></span>Easy</div>
+      </div>
+    </div>
+
     <div class="analyze-section" id="analyze-summary">
       <h3>This Week</h3>
       <div class="kpi-grid">
@@ -2395,6 +2542,9 @@ async function renderAnalyze() {
 
   destroyCharts();
 
+  // Calendar works with any sessions — doesn't require Whoop enrichment.
+  renderCalendar(raw);
+
   if (withWhoop.length === 0) {
     document.getElementById('analyze-empty').style.display = 'block';
     return;
@@ -2406,6 +2556,133 @@ async function renderAnalyze() {
   renderLoad(withWhoop);
   renderCalibration(rows, withWhoop);
 }
+
+// --- Calendar ---
+// Shows one month at a time with month-picker arrows. Days that have sessions
+// are colored by the session's intensity tier (hard/moderate/easy from
+// SESSION_LABELS). Tapping a colored day opens the session's detail modal.
+// If a day has multiple sessions, tapping opens the first; a small dot row
+// at the bottom of the cell indicates additional sessions.
+
+// Module state persists across re-renders so navigation feels natural.
+let calendarViewDate = new Date();
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+function renderCalendar(allSessions) {
+  const grid = document.getElementById('cal-grid');
+  const title = document.getElementById('cal-title');
+  if (!grid || !title) return;
+
+  const year = calendarViewDate.getFullYear();
+  const month = calendarViewDate.getMonth(); // 0-indexed
+
+  // Title: "April 2026"
+  const monthName = calendarViewDate.toLocaleString('en-US', { month: 'long' });
+  title.textContent = `${monthName} ${year}`;
+
+  // Build lookup of sessions by local-date (YYYY-MM-DD).
+  const byDate = {};
+  for (const s of allSessions) {
+    if (!s.date) continue;
+    (byDate[s.date] = byDate[s.date] || []).push(s);
+  }
+
+  // Figure out what cells to render.
+  // First of month, and figure out what day-of-week (ISO: Mon=0..Sun=6).
+  const firstOfMonth = new Date(year, month, 1);
+  const firstDow = (firstOfMonth.getDay() + 6) % 7; // convert Sun=0..Sat=6 to Mon=0..Sun=6
+  // Days in this month
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  // Leading days from previous month
+  const prevMonthLastDay = new Date(year, month, 0).getDate();
+  // Total cells: 6 rows × 7 cols = 42, always (gives a clean grid)
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) {
+    const day = prevMonthLastDay - firstDow + 1 + i;
+    cells.push({ day, month: month - 1, outside: true });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push({ day: d, month, outside: false });
+  }
+  while (cells.length < 42) {
+    const nextDay = cells.length - firstDow - daysInMonth + 1;
+    cells.push({ day: nextDay, month: month + 1, outside: true });
+  }
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  grid.innerHTML = '';
+  for (const c of cells) {
+    // Build ISO date for this cell. Month may be -1 or 12 across year boundaries.
+    const cellDate = new Date(year, c.month, c.day);
+    const iso = `${cellDate.getFullYear()}-${pad2(cellDate.getMonth() + 1)}-${pad2(cellDate.getDate())}`;
+    const sessions = byDate[iso] || [];
+
+    const div = document.createElement('div');
+    div.className = 'cal-day';
+    if (c.outside) div.classList.add('outside');
+    if (iso === todayIso) div.classList.add('today');
+
+    if (sessions.length > 0) {
+      div.classList.add('has-session');
+      // Determine the most-intense tier present (hard > moderate > easy)
+      const tiers = sessions.map(s => (SESSION_LABELS[s.type] || SESSION_LABELS.other).intensity);
+      const tier = tiers.includes('hard') ? 'hard'
+                 : tiers.includes('moderate') ? 'moderate' : 'easy';
+      if (sessions.length > 1 && new Set(tiers).size > 1) {
+        div.classList.add('multi');
+      } else {
+        div.classList.add('intensity-' + tier);
+      }
+      const mostRecent = sessions.reduce((a, b) =>
+        (a.createdAt || '') > (b.createdAt || '') ? a : b);
+      div.addEventListener('click', () => openModal(mostRecent.id));
+
+      // Additional-sessions indicator
+      if (sessions.length > 1) {
+        const dots = document.createElement('div');
+        dots.className = 'cal-dot-row';
+        for (let i = 0; i < Math.min(sessions.length, 3); i++) {
+          const d = document.createElement('span');
+          d.className = 'cal-dot';
+          d.style.background = 'currentColor';
+          dots.appendChild(d);
+        }
+        div.appendChild(dots);
+      }
+    }
+
+    const num = document.createElement('span');
+    num.textContent = c.day;
+    div.appendChild(num);
+    grid.appendChild(div);
+  }
+}
+
+document.getElementById('cal-prev').addEventListener('click', async () => {
+  calendarViewDate = new Date(
+    calendarViewDate.getFullYear(),
+    calendarViewDate.getMonth() - 1,
+    1
+  );
+  const raw = await getAllSessions();
+  renderCalendar(raw);
+});
+document.getElementById('cal-next').addEventListener('click', async () => {
+  calendarViewDate = new Date(
+    calendarViewDate.getFullYear(),
+    calendarViewDate.getMonth() + 1,
+    1
+  );
+  const raw = await getAllSessions();
+  renderCalendar(raw);
+});
+document.getElementById('cal-title').addEventListener('click', async () => {
+  calendarViewDate = new Date();
+  const raw = await getAllSessions();
+  renderCalendar(raw);
+});
 
 function renderThisWeek(rows) {
   const todayKey = isoWeekKey(new Date().toISOString().slice(0, 10));
