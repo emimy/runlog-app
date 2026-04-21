@@ -1051,6 +1051,39 @@ async function ghGetFileSha(path) {
   return data.sha;
 }
 
+// Fallback sha lookup via Git Trees API.
+// The Contents API (used by ghGetFileSha) occasionally returns 404 for files
+// that exist on main due to replication lag or caching. The Trees API reads
+// the branch ref directly and is more reliable as a fallback.
+async function ghGetFileShaViaTree(path) {
+  try {
+    // 1. Get the latest commit on the default branch (assume "main")
+    const refUrl = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/git/refs/heads/main`;
+    const refRes = await fetch(refUrl, { headers: ghHeaders() });
+    if (!refRes.ok) {
+      console.warn('[ghGetFileShaViaTree] ref lookup failed:', refRes.status);
+      return null;
+    }
+    const refData = await refRes.json();
+    const commitSha = refData.object && refData.object.sha;
+    if (!commitSha) return null;
+
+    // 2. Get the tree recursively for that commit
+    const treeUrl = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/git/trees/${commitSha}?recursive=1`;
+    const treeRes = await fetch(treeUrl, { headers: ghHeaders() });
+    if (!treeRes.ok) {
+      console.warn('[ghGetFileShaViaTree] tree lookup failed:', treeRes.status);
+      return null;
+    }
+    const treeData = await treeRes.json();
+    const entry = (treeData.tree || []).find(t => t.path === path);
+    return entry ? entry.sha : null;
+  } catch (e) {
+    console.warn('[ghGetFileShaViaTree] exception:', e.message);
+    return null;
+  }
+}
+
 // UTF-8 safe base64 (JSON may contain non-ASCII chars)
 function utf8ToBase64(str) {
   const bytes = new TextEncoder().encode(str);
@@ -1076,11 +1109,33 @@ async function ghPutSession(session) {
     content,
   };
   if (existingSha) body.sha = existingSha;
-  const res = await fetch(url, {
+
+  const doRequest = async () => fetch(url, {
     method: 'PUT',
     headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+
+  let res = await doRequest();
+
+  // Retry path: if GitHub says the file already exists and needs a sha,
+  // fall back to the Trees API (more reliable than Contents API) and retry.
+  if (res.status === 422) {
+    const errText = await res.text();
+    if (errText.includes('sha') && errText.toLowerCase().includes('wasn\'t supplied')) {
+      console.warn(`[ghPutSession] 422 sha error for ${path} — retrying via Trees API`);
+      const fallbackSha = await ghGetFileShaViaTree(path);
+      if (fallbackSha) {
+        body.sha = fallbackSha;
+        res = await doRequest();
+      } else {
+        throw new Error(`PUT ${path}: 422 and Trees API couldn't find file either`);
+      }
+    } else {
+      throw new Error(`PUT ${path}: 422 ${errText.slice(0, 100)}`);
+    }
+  }
+
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`PUT ${path}: ${res.status} ${err.slice(0, 100)}`);
@@ -1216,12 +1271,54 @@ async function syncAllUnsynced() {
   return { total: pending.length, ok, failed };
 }
 
+// True if the GitHub session contains enrichment fields that local lacks.
+// We treat a session as "richer" if:
+//  - GitHub has _whoopData and local doesn't, OR
+//  - Both have _whoopData but GitHub has more keys (e.g. zones, strain), OR
+//  - GitHub has imageDataUrl and local doesn't.
+// We never overwrite local edits to manual fields (type, equipment, notes) —
+// those are merged in: local values win for user-editable fields.
+function isGhRicher(gh, local) {
+  if (!local) return true;
+  const ghW = gh._whoopData || {};
+  const locW = local._whoopData || {};
+  const ghKeys = Object.keys(ghW);
+  const locKeys = Object.keys(locW);
+  if (ghKeys.length > locKeys.length) return true;
+  // Critical enrichment fields only on GitHub?
+  const enrichedFields = ['strain', 'z1_min', 'z2_min', 'z3_min', 'z4_min', 'z5_min', 'zone_durations'];
+  for (const k of enrichedFields) {
+    if (ghW[k] != null && locW[k] == null) return true;
+  }
+  if (gh.imageDataUrl && !local.imageDataUrl) return true;
+  return false;
+}
+
+// Merge GitHub session into local, preserving user-editable fields.
+// Strategy: start from GitHub, then overlay local edits to user-editable fields.
+function mergeGhIntoLocal(gh, local) {
+  if (!local) return gh;
+  const userFields = ['type', 'typeLabel', 'otherDesc', 'equipment', 'treadmill',
+                      'distanceKm', 'avgSpeedKmh', 'durationMinutes', 'workoutNotes'];
+  const merged = { ...gh };
+  for (const f of userFields) {
+    if (local[f] != null && local[f] !== '') merged[f] = local[f];
+  }
+  // Preserve local image if GitHub doesn't have one
+  if (!merged.imageDataUrl && local.imageDataUrl) {
+    merged.imageDataUrl = local.imageDataUrl;
+    merged.imageSize = local.imageSize;
+    merged.imageType = local.imageType;
+  }
+  return merged;
+}
+
 async function pullFromGh() {
   if (!ghConfig) throw new Error('Not configured');
   const files = await ghListSessions();
   const local = await getAllSessions();
-  const localIds = new Set(local.map(s => s.id));
-  let added = 0, skipped = 0, failed = 0;
+  const localById = new Map(local.map(s => [s.id, s]));
+  let added = 0, updated = 0, skipped = 0, failed = 0;
   let lastError = null;
   for (const f of files) {
     try {
@@ -1231,8 +1328,24 @@ async function pullFromGh() {
         failed++;
         continue;
       }
-      if (localIds.has(session.id)) { skipped++; continue; }
+      const existing = localById.get(session.id);
+      if (existing) {
+        // Session exists locally. Only overwrite if GitHub has richer data.
+        if (isGhRicher(session, existing)) {
+          const merged = mergeGhIntoLocal(session, existing);
+          merged.syncedAt = new Date().toISOString();
+          merged.syncState = 'synced';
+          await putSession(merged);
+          updated++;
+          console.log('[pullFromGh] updated', f.name, '(GitHub had richer data)');
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+      // Brand new session — add it.
       session.syncedAt = new Date().toISOString();
+      session.syncState = 'synced';
       await putSession(session);
       added++;
     } catch (err) {
@@ -1241,7 +1354,7 @@ async function pullFromGh() {
       lastError = err.message;
     }
   }
-  return { total: files.length, added, skipped, failed, lastError };
+  return { total: files.length, added, updated, skipped, failed, lastError };
 }
 
 // ============================================================
@@ -1472,14 +1585,31 @@ saveBtn.addEventListener('click', async () => {
       session.imageType = existing.imageType;
     }
 
-    // When editing, clear the syncedAt so the sync pushes the update to GitHub
-    if (isEdit) {
+    // When editing, only re-flag for sync if the session's content actually
+    // changed. Opening and closing the edit modal without touching anything
+    // should not queue a push. We compare content-fingerprints of user-visible
+    // fields; metadata like syncedAt/syncState is excluded.
+    const contentFingerprint = (s) => {
+      if (!s) return '';
+      const fields = ['type', 'otherDesc', 'date', 'equipment', 'treadmill',
+                      'distanceKm', 'avgSpeedKmh', 'durationMinutes',
+                      'workoutNotes', 'imageSize', 'imageType'];
+      return JSON.stringify(fields.map(f => s[f] ?? null));
+    };
+    const contentChanged = isEdit ? contentFingerprint(existing) !== contentFingerprint(session) : true;
+
+    if (isEdit && contentChanged) {
       session.syncedAt = null;
     }
-
-    // Mark as pending before write so UI can show sync status
-    session.syncState = ghConfig ? 'pending' : 'local_only';
-    session.syncError = null;
+    if (!isEdit || contentChanged) {
+      session.syncState = ghConfig ? 'pending' : 'local_only';
+      session.syncError = null;
+    } else {
+      // No changes — preserve existing sync state so we don't re-push
+      session.syncedAt = existing.syncedAt;
+      session.syncState = existing.syncState;
+      session.syncError = existing.syncError;
+    }
 
     await putSession(session);
 
@@ -1817,7 +1947,11 @@ document.getElementById('gh-pull-btn').addEventListener('click', async () => {
     } else if (r.failed > 0) {
       toast(`Found ${r.total}, ${r.failed} failed: ${r.lastError || 'see console'}`, true);
     } else {
-      toast(`Found ${r.total}, pulled ${r.added} new, skipped ${r.skipped}`);
+      const parts = [];
+      if (r.added) parts.push(`${r.added} new`);
+      if (r.updated) parts.push(`${r.updated} updated`);
+      if (r.skipped) parts.push(`${r.skipped} unchanged`);
+      toast(`Pulled ${r.total}: ${parts.join(', ') || 'nothing'}`);
     }
     updateCount();
     renderSettings();
@@ -1967,18 +2101,44 @@ function normalize(session) {
   let mins = session.durationMinutes != null ? Number(session.durationMinutes) : null;
   let z1 = 0, z2 = 0, z3 = 0, z4 = 0, z5 = 0;
   let maxHr = null, avgHr = null, strain = null;
-  const zd = w && w.zone_durations;
+  let hasWhoop = false;
 
-  if (zd) {
-    z1 = toMin(zd.zone_one_milli);
-    z2 = toMin(zd.zone_two_milli);
-    z3 = toMin(zd.zone_three_milli);
-    z4 = toMin(zd.zone_four_milli);
-    z5 = toMin(zd.zone_five_milli);
-    if (mins == null) mins = z1 + z2 + z3 + z4 + z5 + toMin(zd.zone_zero_milli);
-    maxHr = w.max_heart_rate ?? null;
-    avgHr = w.average_heart_rate ?? null;
-    strain = w.strain ?? null;
+  if (w) {
+    // Schema A (from enrichment script): z1_min..z5_min, strain, max_hr, avg_hr
+    if (w.z5_min != null || w.z4_min != null || w.z3_min != null) {
+      z1 = Number(w.z1_min) || 0;
+      z2 = Number(w.z2_min) || 0;
+      z3 = Number(w.z3_min) || 0;
+      z4 = Number(w.z4_min) || 0;
+      z5 = Number(w.z5_min) || 0;
+      maxHr = w.max_hr ?? null;
+      avgHr = w.avg_hr ?? null;
+      strain = w.strain ?? null;
+      if (mins == null) mins = Number(w.full_duration_min) || (z1+z2+z3+z4+z5);
+      hasWhoop = true;
+    }
+    // Schema B (Whoop API native): zone_durations in milliseconds
+    else if (w.zone_durations) {
+      const zd = w.zone_durations;
+      z1 = (zd.zone_one_milli || 0) / 60000;
+      z2 = (zd.zone_two_milli || 0) / 60000;
+      z3 = (zd.zone_three_milli || 0) / 60000;
+      z4 = (zd.zone_four_milli || 0) / 60000;
+      z5 = (zd.zone_five_milli || 0) / 60000;
+      if (mins == null) mins = z1 + z2 + z3 + z4 + z5 + ((zd.zone_zero_milli || 0) / 60000);
+      maxHr = w.max_heart_rate ?? null;
+      avgHr = w.average_heart_rate ?? null;
+      strain = w.strain ?? null;
+      hasWhoop = true;
+    }
+    // Schema C (phone's stripped version): only max_hr/avg_hr, no zones.
+    // Treat as "partial" — usable for max HR trends but not stimulus analysis.
+    else if (w.max_hr != null || w.avg_hr != null) {
+      maxHr = w.max_hr ?? null;
+      avgHr = w.avg_hr ?? null;
+      if (mins == null) mins = Number(w.full_duration_min) || 0;
+      // hasWhoop stays false — no zone data means can't plot Z5 charts
+    }
   }
 
   return {
@@ -1992,7 +2152,7 @@ function normalize(session) {
     mins: mins || 0,
     z1, z2, z3, z4, z5,
     maxHr, avgHr, strain,
-    hasWhoop: !!zd,
+    hasWhoop,
   };
 }
 
@@ -2350,13 +2510,18 @@ async function updateCount() {
         (async () => {
           try {
             const r = await pullFromGh();
-            if (r.added > 0) {
-              toast(`Pulled ${r.added} new from GitHub`);
+            const changes = (r.added || 0) + (r.updated || 0);
+            if (changes > 0) {
+              const parts = [];
+              if (r.added) parts.push(`${r.added} new`);
+              if (r.updated) parts.push(`${r.updated} updated`);
+              toast(`Pulled ${parts.join(', ')}`);
               updateCount();
               // if user is currently viewing History or Settings, refresh
               const activeView = document.querySelector('.view.active');
               if (activeView && activeView.id === 'view-list') renderList();
               if (activeView && activeView.id === 'view-settings') renderSettings();
+              if (activeView && activeView.id === 'view-analyze') renderAnalyze();
             }
           } catch (err) {
             console.warn('Auto-pull failed:', err);
