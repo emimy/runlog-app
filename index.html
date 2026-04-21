@@ -836,6 +836,7 @@
     <dl class="kv" id="modal-kv"></dl>
     <div class="buttons">
       <button class="primary" id="modal-edit">Edit</button>
+      <button class="secondary" id="modal-whoop" style="display:none">Match Whoop workout</button>
       <button class="secondary" id="modal-close">Close</button>
       <button class="danger" id="modal-delete">Delete</button>
     </div>
@@ -1665,6 +1666,22 @@ saveBtn.addEventListener('click', async () => {
     resetForm();
     updateCount();
 
+    // Whoop enrichment: for new sessions only, try to attach zone data from Whoop.
+    // Runs silently. If it succeeds, the session now has _whoopData; the GitHub
+    // sync below will push the enriched version. If it fails, the session is
+    // still saved locally.
+    if (!isEdit && whoopTokens) {
+      const result = await enrichSessionWithWhoop(await getSession(session.id));
+      if (result.enriched) {
+        toast(`Whoop: zones attached (Z5 ${result.workout.score?.zone_durations?.zone_five_milli ? (result.workout.score.zone_durations.zone_five_milli/60000).toFixed(1) : '0'}m)`);
+      } else if (result.reason === 'no_workouts_found') {
+        toast('Whoop: no workout found for this date', true);
+      } else if (result.reason === 'error') {
+        toast('Whoop enrichment failed: ' + (result.error || 'unknown'), true);
+      }
+      // 'already_enriched' and 'not_connected' stay silent
+    }
+
     // Auto-sync to GitHub if configured — pass ID so sync re-reads from IDB
     if (ghConfig) {
       const result = await syncSessionToGh(session.id);
@@ -1834,9 +1851,33 @@ async function openModal(id) {
   }
   if (s.avgSpeedKmh != null) rows.push(['Avg Speed', s.avgSpeedKmh + ' km/h']);
   if (s.workoutNotes) rows.push(['Notes', s.workoutNotes]);
+
+  // Whoop data summary
+  const wd = s._whoopData;
+  if (wd) {
+    if (wd.strain != null) rows.push(['Whoop strain', Number(wd.strain).toFixed(1)]);
+    if (wd.max_hr != null) rows.push(['Max HR', wd.max_hr + ' bpm']);
+    if (wd.avg_hr != null) rows.push(['Avg HR', wd.avg_hr + ' bpm']);
+    if (wd.z5_min != null) {
+      rows.push(['Zone mins',
+        `Z1 ${wd.z1_min} · Z2 ${wd.z2_min} · Z3 ${wd.z3_min} · Z4 ${wd.z4_min} · Z5 ${wd.z5_min}`]);
+    }
+  }
+
   rows.push(['Logged at', new Date(s.createdAt).toLocaleString()]);
 
   modalKv.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+
+  // Match-Whoop button: visible only when connected to Whoop.
+  // Button label indicates whether it will match or re-match.
+  const whoopBtn = document.getElementById('modal-whoop');
+  if (whoopTokens) {
+    whoopBtn.style.display = 'block';
+    whoopBtn.textContent = (wd && wd.z5_min != null) ? 'Re-match Whoop workout' : 'Match Whoop workout';
+  } else {
+    whoopBtn.style.display = 'none';
+  }
+
   modalBg.classList.add('show');
 }
 
@@ -1853,6 +1894,55 @@ modalDelete.addEventListener('click', async () => {
   toast('Deleted');
   updateCount();
   renderList();
+});
+
+// Match (or re-match) Whoop workout for the currently open session.
+// For re-match: confirms first, then force-enriches by clearing existing
+// _whoopData before calling the enricher.
+document.getElementById('modal-whoop').addEventListener('click', async () => {
+  if (!currentModalId) return;
+  const btn = document.getElementById('modal-whoop');
+  const original = btn.textContent;
+  const session = await getSession(currentModalId);
+  if (!session) return;
+
+  const isRematch = session._whoopData && session._whoopData.z5_min != null;
+  if (isRematch) {
+    if (!confirm('Replace existing Whoop data with a fresh match?')) return;
+    // Clear existing data so the enricher treats this as a fresh match
+    delete session._whoopData;
+    await putSession(session);
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Matching...';
+  try {
+    const result = await enrichSessionWithWhoop(await getSession(currentModalId));
+    if (result.enriched) {
+      const z5 = result.workout.score?.zone_durations?.zone_five_milli
+        ? (result.workout.score.zone_durations.zone_five_milli / 60000).toFixed(1)
+        : '0';
+      toast(`Matched: Z5 ${z5}m${result.candidateCount > 1 ? ` (${result.candidateCount} candidates)` : ''}`);
+      // Sync enriched session to GitHub if configured
+      if (ghConfig) {
+        await syncSessionToGh(currentModalId);
+      }
+      // Refresh modal with new data
+      await openModal(currentModalId);
+      renderList();
+    } else if (result.reason === 'no_workouts_found') {
+      toast('No Whoop workout found for this date', true);
+    } else if (result.reason === 'already_enriched') {
+      toast('Session already has Whoop data');
+    } else {
+      toast('Match failed: ' + (result.error || result.reason), true);
+    }
+  } catch (err) {
+    toast('Match failed: ' + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 });
 
 // ============================================================
@@ -2742,6 +2832,140 @@ document.getElementById('whoop-disconnect-btn').addEventListener('click', async 
   toast('Whoop disconnected');
   renderWhoopSettings();
 });
+
+// ============================================================
+// Whoop enrichment
+// ============================================================
+// Given a saved session, find the matching Whoop workout and inject a
+// full _whoopData block with zones, strain, HR, whoop_id.
+//
+// Matching heuristic mirrors restore_whoop_data.py:
+//   - Filter to running workouts on the session's date (plus the previous
+//     day to catch cross-midnight runs, since Whoop may date them differently
+//     than the user logged them).
+//   - If one candidate: use it.
+//   - If multiple: for 4x4/hwpo_intervals pick the workout with highest Z4+Z5;
+//     otherwise pick the longest one.
+//   - If zero: no enrichment.
+
+const LOCAL_TZ_OFFSET_HOURS = 3; // Dammam. Whoop returns UTC; convert to local.
+
+function toLocalDate(utcIso) {
+  const utc = new Date(utcIso);
+  const local = new Date(utc.getTime() + LOCAL_TZ_OFFSET_HOURS * 3600 * 1000);
+  return local.toISOString().slice(0, 10);
+}
+function toLocalHHMM(utcIso) {
+  const utc = new Date(utcIso);
+  const local = new Date(utc.getTime() + LOCAL_TZ_OFFSET_HOURS * 3600 * 1000);
+  return local.toISOString().slice(11, 16);
+}
+
+// Build a compact _whoopData block from a Whoop workout record.
+function buildWhoopDataFromWorkout(w) {
+  const score = w.score || {};
+  const zd = score.zone_durations || {};
+  const startUtc = w.start;
+  const endUtc = w.end;
+  const durMin = (new Date(endUtc) - new Date(startUtc)) / 60000;
+  return {
+    whoop_id: w.id,
+    whoop_start_time_local: toLocalHHMM(startUtc),
+    full_duration_min: Math.round(durMin * 100) / 100,
+    max_hr: score.max_heart_rate ?? null,
+    avg_hr: score.average_heart_rate ?? null,
+    strain: score.strain ?? null,
+    z1_min: Math.round((zd.zone_one_milli   || 0) / 600) / 100,
+    z2_min: Math.round((zd.zone_two_milli   || 0) / 600) / 100,
+    z3_min: Math.round((zd.zone_three_milli || 0) / 600) / 100,
+    z4_min: Math.round((zd.zone_four_milli  || 0) / 600) / 100,
+    z5_min: Math.round((zd.zone_five_milli  || 0) / 600) / 100,
+  };
+}
+
+// Fetch running workouts overlapping the given date (and the day before, to
+// catch cross-midnight runs). Returns candidates sorted by local start time.
+async function whoopRunningWorkoutsFor(dateStr) {
+  // Build a UTC window covering [date-1, date+1] to be safe with TZ.
+  const d = new Date(dateStr + 'T00:00:00Z');
+  const startUtc = new Date(d.getTime() - 36 * 3600 * 1000).toISOString(); // 36h before
+  const endUtc   = new Date(d.getTime() + 48 * 3600 * 1000).toISOString(); // 48h after
+
+  const data = await whoopApi('/activity/workout', {
+    start: startUtc,
+    end: endUtc,
+    limit: 25,
+  });
+  const all = data.records || [];
+  // Filter to running sessions whose LOCAL date is either the target date or the day before.
+  const prevDate = new Date(d.getTime() - 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const runs = all.filter(w => {
+    if ((w.sport_name || '').toLowerCase() !== 'running') return false;
+    const localDate = toLocalDate(w.start);
+    return localDate === dateStr || localDate === prevDate;
+  });
+  // Prefer same-day matches. If none, fall back to previous day.
+  const sameDay = runs.filter(w => toLocalDate(w.start) === dateStr);
+  const candidates = sameDay.length ? sameDay : runs;
+  candidates.sort((a, b) => new Date(a.start) - new Date(b.start));
+  return candidates;
+}
+
+// Pick the best Whoop workout for this session from the candidates.
+function pickBestWhoopWorkout(candidates, sessionType) {
+  if (!candidates.length) return null;
+  if (candidates.length === 1) return candidates[0];
+  const intervalTypes = new Set(['4x4', 'hwpo_intervals']);
+  if (intervalTypes.has(sessionType)) {
+    // Prefer highest Z4+Z5 minutes (most intense)
+    return candidates.reduce((best, w) => {
+      const zd = (w.score && w.score.zone_durations) || {};
+      const hard = (zd.zone_four_milli || 0) + (zd.zone_five_milli || 0);
+      const bestZd = (best.score && best.score.zone_durations) || {};
+      const bestHard = (bestZd.zone_four_milli || 0) + (bestZd.zone_five_milli || 0);
+      return hard > bestHard ? w : best;
+    });
+  }
+  // Everything else: pick longest duration
+  return candidates.reduce((best, w) => {
+    const dur = new Date(w.end) - new Date(w.start);
+    const bestDur = new Date(best.end) - new Date(best.start);
+    return dur > bestDur ? w : best;
+  });
+}
+
+// Main entry point: given a session object, try to enrich it with Whoop data.
+// Returns { enriched: bool, reason: string, workout?: object }.
+// Does NOT overwrite existing _whoopData (see policy in Phase C design).
+async function enrichSessionWithWhoop(session) {
+  if (!whoopTokens) return { enriched: false, reason: 'not_connected' };
+  if (session._whoopData && session._whoopData.z5_min != null) {
+    return { enriched: false, reason: 'already_enriched' };
+  }
+  try {
+    const candidates = await whoopRunningWorkoutsFor(session.date);
+    if (candidates.length === 0) {
+      return { enriched: false, reason: 'no_workouts_found' };
+    }
+    const best = pickBestWhoopWorkout(candidates, session.type);
+    const wd = buildWhoopDataFromWorkout(best);
+    session._whoopData = wd;
+    // If duration wasn't set, borrow from Whoop
+    if (session.durationMinutes == null && wd.full_duration_min) {
+      session.durationMinutes = wd.full_duration_min;
+    }
+    await putSession(session);
+    return {
+      enriched: true,
+      reason: candidates.length > 1 ? 'picked_best_of_multiple' : 'single_match',
+      workout: best,
+      candidateCount: candidates.length,
+    };
+  } catch (err) {
+    console.warn('[whoop enrichment] failed:', err);
+    return { enriched: false, reason: 'error', error: err.message };
+  }
+}
 
 // ============================================================
 // Bootstrap
