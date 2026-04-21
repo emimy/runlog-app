@@ -519,6 +519,17 @@
     margin-top: 4px;
     line-height: 1.2;
   }
+  .kpi-delta {
+    display: inline-block;
+    margin-left: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .kpi-delta.up { color: #86efac; }
+  .kpi-delta.down { color: #fca5a5; }
+  .kpi-delta.flat { color: var(--text-dim); }
 
   .chart-wrap {
     position: relative;
@@ -945,32 +956,39 @@
     </div>
 
     <div class="analyze-section" id="analyze-summary">
-      <h3>Last 7 days</h3>
+      <div class="cal-header">
+        <button id="wk7-prev" aria-label="Previous 7 days">‹</button>
+        <div class="cal-title" id="wk7-label">Last 7 days</div>
+        <button id="wk7-next" aria-label="Next 7 days">›</button>
+      </div>
       <div class="kpi-grid">
-        <div class="kpi"><div class="val" id="kpi-4x4">–</div><div class="lbl"># 4×4</div></div>
-        <div class="kpi"><div class="val" id="kpi-z45">–</div><div class="lbl">Z4+Z5 min</div></div>
-        <div class="kpi"><div class="val" id="kpi-z2mins">–</div><div class="lbl">Z2 run min</div></div>
+        <div class="kpi">
+          <div class="val" id="kpi-4x4">–</div>
+          <div class="lbl"># 4×4 <span class="kpi-delta" id="kpi-4x4-delta"></span></div>
+        </div>
+        <div class="kpi">
+          <div class="val" id="kpi-z45">–</div>
+          <div class="lbl">Z4+Z5 min <span class="kpi-delta" id="kpi-z45-delta"></span></div>
+        </div>
+        <div class="kpi">
+          <div class="val" id="kpi-z2mins">–</div>
+          <div class="lbl">Z2 run min <span class="kpi-delta" id="kpi-z2mins-delta"></span></div>
+        </div>
       </div>
     </div>
 
     <div class="analyze-section">
-      <h3>4-week Summary</h3>
-
-      <h4>Z4+Z5 minutes per week <span id="note-z45-total" class="cal-legend-item" style="font-weight:400;font-size:12px;color:var(--text-dim);margin-left:6px"></span></h4>
-      <div class="chart-wrap"><canvas id="chart-weekly-z45"></canvas></div>
-
-      <h4>Zone 2 run minutes per week <span id="note-z2-total" class="cal-legend-item" style="font-weight:400;font-size:12px;color:var(--text-dim);margin-left:6px"></span></h4>
-      <div class="chart-wrap"><canvas id="chart-weekly-z2"></canvas></div>
+      <div class="cal-header">
+        <button id="wk4-prev" aria-label="Previous 4 weeks">‹</button>
+        <div class="cal-title" id="wk4-label">4-week Summary</div>
+        <button id="wk4-next" aria-label="Next 4 weeks">›</button>
+      </div>
+      <div class="chart-note" id="note-4wk-total" style="margin-top:4px;margin-bottom:8px"></div>
+      <div class="chart-wrap"><canvas id="chart-weekly-combined"></canvas></div>
     </div>
 
     <div class="analyze-section">
-      <h3>Pace &amp; HR Calibration</h3>
-
-      <h4>Outdoor GPS: pace vs avg HR</h4>
-      <div class="chart-wrap"><canvas id="chart-gps-pace-hr"></canvas></div>
-      <div class="chart-note" id="note-gps"></div>
-
-      <h4>4×4 HR over time</h4>
+      <h3>4×4 HR Trend</h3>
       <div class="chart-wrap"><canvas id="chart-4x4-maxhr"></canvas></div>
     </div>
 
@@ -1009,7 +1027,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-1';
+const APP_VERSION = '2026-04-21-2';
 
 // ============================================================
 // IndexedDB setup
@@ -2607,7 +2625,7 @@ async function renderAnalyze() {
 
   renderLast7Days(rows);
   renderFourWeekSummary(rows);
-  renderCalibration(rows, withWhoop);
+  render4x4HrChart(withWhoop);
 }
 
 // ============================================================
@@ -2752,185 +2770,212 @@ document.getElementById('cal-title').addEventListener('click', async () => {
 });
 
 // ============================================================
-// Last 7 days KPIs
+// Last 7 days KPIs — with windowed navigation + deltas vs previous window
 // ============================================================
-// Rolling window: today minus 6 days inclusive (so 7 total days ending today).
-// NOT the ISO week starting Monday — different semantic from the old "This Week".
-function renderLast7Days(rows) {
-  const today = new Date().toISOString().slice(0, 10);
-  const sevenAgo = new Date(Date.now() - 6 * 86400 * 1000).toISOString().slice(0, 10);
-  const wk = rows.filter(r => r.date >= sevenAgo && r.date <= today);
+// Window semantics: "day + 6 last days" = a 7-day span ending on a chosen
+// anchor date. Anchor starts at today and can shift backwards 7 days at a
+// time via the ‹ button, forwards via ›. Cannot shift forward past today.
+// For each KPI we also compute the same metric on the preceding 7-day
+// window (anchor-7..anchor-13) and display the delta.
 
-  // # 4x4 sessions (treating hwpo_intervals separately — only label "4x4" here)
-  const count4x4 = wk.filter(r => r.type === '4x4').length;
+let wk7Anchor = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+let allRowsCache = []; // stash so nav buttons don't refetch
 
-  // Z4 + Z5 minutes across all sessions in window
-  const z45 = wk.reduce((s, r) => s + (r.z4 || 0) + (r.z5 || 0), 0);
-
-  // Z2 run minutes — sessions typed as z2, sum total minutes (any zone).
-  // Reason: you specifically said "Z2 run minutes (even if i'm in zone 3)" — the
-  // duration of sessions *labeled* as z2, not time spent in the Z2 zone.
-  const z2Mins = wk.filter(r => r.type === 'z2').reduce((s, r) => s + (r.mins || 0), 0);
-
-  document.getElementById('kpi-4x4').textContent = count4x4;
-  document.getElementById('kpi-z45').textContent = Math.round(z45);
-  document.getElementById('kpi-z2mins').textContent = Math.round(z2Mins);
+function isoBack(iso, days) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+function isoForward(iso, days) {
+  return isoBack(iso, -days);
+}
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+function formatRange(startIso, endIso) {
+  // Human label: "15/4–21/4" or "2026-03-08..." if across months becomes cluttered
+  const s = new Date(startIso + 'T00:00:00Z');
+  const e = new Date(endIso + 'T00:00:00Z');
+  return `${s.getUTCDate()}/${s.getUTCMonth() + 1} – ${e.getUTCDate()}/${e.getUTCMonth() + 1}`;
 }
 
+function sumFor(rows, startIso, endIso) {
+  const in_ = rows.filter(r => r.date >= startIso && r.date <= endIso);
+  return {
+    count4x4: in_.filter(r => r.type === '4x4').length,
+    z45: in_.reduce((s, r) => s + (r.z4 || 0) + (r.z5 || 0), 0),
+    z2mins: in_.filter(r => r.type === 'z2').reduce((s, r) => s + (r.mins || 0), 0),
+  };
+}
+
+function formatAbsDelta(cur, prev) {
+  const d = cur - prev;
+  if (d === 0) return { text: '±0', cls: 'flat' };
+  const sign = d > 0 ? '+' : '';
+  return { text: `${sign}${d}`, cls: d > 0 ? 'up' : 'down' };
+}
+
+function formatPctDelta(cur, prev) {
+  if (prev === 0 && cur === 0) return { text: '±0%', cls: 'flat' };
+  if (prev === 0) return { text: '—', cls: 'flat' }; // undefined pct change
+  const d = ((cur - prev) / prev) * 100;
+  if (Math.abs(d) < 0.5) return { text: '±0%', cls: 'flat' };
+  const rounded = Math.round(d);
+  const sign = rounded > 0 ? '+' : '';
+  return { text: `${sign}${rounded}%`, cls: rounded > 0 ? 'up' : 'down' };
+}
+
+function renderLast7Days(rows) {
+  allRowsCache = rows;
+
+  const end = wk7Anchor;
+  const start = isoBack(end, 6);
+  const prevEnd = isoBack(end, 7);
+  const prevStart = isoBack(end, 13);
+
+  const cur = sumFor(rows, start, end);
+  const prev = sumFor(rows, prevStart, prevEnd);
+
+  // Label
+  document.getElementById('wk7-label').textContent =
+    end === todayIso() ? `Last 7 days (${formatRange(start, end)})`
+                       : formatRange(start, end);
+
+  // Next button disabled when anchor = today
+  document.getElementById('wk7-next').disabled = (end === todayIso());
+
+  // KPI values
+  document.getElementById('kpi-4x4').textContent = cur.count4x4;
+  document.getElementById('kpi-z45').textContent = Math.round(cur.z45);
+  document.getElementById('kpi-z2mins').textContent = Math.round(cur.z2mins);
+
+  // Deltas
+  const d4x4 = formatAbsDelta(cur.count4x4, prev.count4x4);
+  const dz45 = formatPctDelta(cur.z45, prev.z45);
+  const dz2  = formatPctDelta(cur.z2mins, prev.z2mins);
+
+  const el1 = document.getElementById('kpi-4x4-delta');
+  const el2 = document.getElementById('kpi-z45-delta');
+  const el3 = document.getElementById('kpi-z2mins-delta');
+  el1.textContent = d4x4.text; el1.className = 'kpi-delta ' + d4x4.cls;
+  el2.textContent = dz45.text; el2.className = 'kpi-delta ' + dz45.cls;
+  el3.textContent = dz2.text;  el3.className = 'kpi-delta ' + dz2.cls;
+}
+
+document.getElementById('wk7-prev').addEventListener('click', () => {
+  wk7Anchor = isoBack(wk7Anchor, 7);
+  renderLast7Days(allRowsCache);
+});
+document.getElementById('wk7-next').addEventListener('click', () => {
+  const next = isoForward(wk7Anchor, 7);
+  // Don't go past today
+  if (next > todayIso()) return;
+  wk7Anchor = next;
+  renderLast7Days(allRowsCache);
+});
+
 // ============================================================
-// 4-week summary (Z4+Z5, Z2 minutes per week)
+// 4-week summary — windowed, combined Z2 & Z4+Z5 per week
 // ============================================================
-// "Week" = rolling 7-day bucket ending at the current day. 4 buckets total.
-// Bucket 0 = today..today-6, Bucket 1 = today-7..today-13, etc.
-// Rendered oldest-to-newest on the x-axis.
+// Anchor is the end date of the most recent week in the window.
+// Window shows 4 consecutive 7-day buckets ending at anchor.
+// Nav by 4 weeks at a time. Cannot scroll past today.
+
+let wk4Anchor = new Date().toISOString().slice(0, 10);
+
 function renderFourWeekSummary(rows) {
-  const todayMs = Date.now();
-  const DAY = 86400 * 1000;
+  allRowsCache = rows;
   const buckets = [];
   for (let w = 3; w >= 0; w--) {
-    const end = new Date(todayMs - w * 7 * DAY);
-    const start = new Date(todayMs - (w * 7 + 6) * DAY);
-    const startIso = start.toISOString().slice(0, 10);
-    const endIso = end.toISOString().slice(0, 10);
+    const endIso = isoBack(wk4Anchor, w * 7);
+    const startIso = isoBack(endIso, 6);
     const in_ = rows.filter(r => r.date >= startIso && r.date <= endIso);
     const z45 = in_.reduce((s, r) => s + (r.z4 || 0) + (r.z5 || 0), 0);
-    const z2Mins = in_.filter(r => r.type === 'z2').reduce((s, r) => s + (r.mins || 0), 0);
+    const z2m = in_.filter(r => r.type === 'z2').reduce((s, r) => s + (r.mins || 0), 0);
     buckets.push({
-      label: `${start.getDate()}/${start.getMonth() + 1}–${end.getDate()}/${end.getMonth() + 1}`,
+      label: formatRange(startIso, endIso),
       z45: Math.round(z45),
-      z2: Math.round(z2Mins),
+      z2: Math.round(z2m),
     });
   }
 
-  // Headline totals (last 28 days, sum across all 4 buckets)
-  const total28_z45 = buckets.reduce((s, b) => s + b.z45, 0);
-  const total28_z2  = buckets.reduce((s, b) => s + b.z2, 0);
-  const n_z45 = document.getElementById('note-z45-total');
-  const n_z2  = document.getElementById('note-z2-total');
-  if (n_z45) n_z45.textContent = `(last 28d: ${total28_z45} min total)`;
-  if (n_z2)  n_z2.textContent  = `(last 28d: ${total28_z2} min total)`;
+  // Label: "4 weeks through 21/4" or windowed range
+  const windowStart = isoBack(wk4Anchor, 27);
+  document.getElementById('wk4-label').textContent = formatRange(windowStart, wk4Anchor);
 
-  // Z4+Z5 chart
-  const ctx1 = document.getElementById('chart-weekly-z45').getContext('2d');
-  analyzeCharts.z45 = new Chart(ctx1, {
+  // Next button disabled when latest bucket already reaches today
+  document.getElementById('wk4-next').disabled = (wk4Anchor === todayIso());
+
+  // Headline totals
+  const total_z45 = buckets.reduce((s, b) => s + b.z45, 0);
+  const total_z2  = buckets.reduce((s, b) => s + b.z2, 0);
+  document.getElementById('note-4wk-total').textContent =
+    `Totals this window: Z4+Z5 ${total_z45} min, Z2 sessions ${total_z2} min`;
+
+  // Combined grouped bar chart
+  const ctx = document.getElementById('chart-weekly-combined').getContext('2d');
+  analyzeCharts.combined = new Chart(ctx, {
     type: 'bar',
     data: {
       labels: buckets.map(b => b.label),
-      datasets: [{
-        label: 'Z4+Z5 minutes',
-        data: buckets.map(b => b.z45),
-        backgroundColor: 'rgba(239, 68, 68, 0.6)',
-        borderColor: 'rgba(239, 68, 68, 0.9)',
-        borderWidth: 1,
-      }],
+      datasets: [
+        {
+          label: 'Z4+Z5 min',
+          data: buckets.map(b => b.z45),
+          backgroundColor: 'rgba(239, 68, 68, 0.6)',
+          borderColor: 'rgba(239, 68, 68, 0.9)',
+          borderWidth: 1,
+        },
+        {
+          label: 'Z2 session min',
+          data: buckets.map(b => b.z2),
+          backgroundColor: 'rgba(74, 222, 128, 0.6)',
+          borderColor: 'rgba(74, 222, 128, 0.9)',
+          borderWidth: 1,
+        },
+      ],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { labels: { color: '#cbd5e1' } } },
       scales: {
         x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true },
-      },
-    },
-  });
-
-  // Z2 chart
-  const ctx2 = document.getElementById('chart-weekly-z2').getContext('2d');
-  analyzeCharts.z2 = new Chart(ctx2, {
-    type: 'bar',
-    data: {
-      labels: buckets.map(b => b.label),
-      datasets: [{
-        label: 'Z2 run minutes',
-        data: buckets.map(b => b.z2),
-        backgroundColor: 'rgba(74, 222, 128, 0.6)',
-        borderColor: 'rgba(74, 222, 128, 0.9)',
-        borderWidth: 1,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true },
+        y: {
+          ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
+          beginAtZero: true,
+          title: { display: true, text: 'minutes', color: '#94a3b8' },
+        },
       },
     },
   });
 }
 
-// ============================================================
-// Pace & HR Calibration
-// ============================================================
-// Section 1: GPS scatter. Bug fix: old code required type === 'gps_outdoor'
-// but user logs outdoor runs as long_run with equipment=outdoor. New filter:
-// equipment === 'outdoor' AND we have pace + avg HR.
-// Section 2: 4x4 HR over time — show BOTH max and avg HR lines.
-function renderCalibration(allRows, withWhoop) {
-  // ---- GPS scatter ----
-  const gpsRuns = withWhoop.filter(r =>
-    r.equipment === 'outdoor' && r.avgSpeedKmh && r.avgHr);
-  const gpsNote = document.getElementById('note-gps');
-  const gpsCtx = document.getElementById('chart-gps-pace-hr').getContext('2d');
-
-  if (gpsRuns.length === 0) {
-    gpsNote.textContent = 'No outdoor GPS runs with pace + HR yet.';
-    analyzeCharts.gps = new Chart(gpsCtx, {
-      type: 'scatter',
-      data: { datasets: [{ data: [] }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
-    });
+document.getElementById('wk4-prev').addEventListener('click', () => {
+  wk4Anchor = isoBack(wk4Anchor, 28);
+  destroyCharts();
+  renderFourWeekSummary(allRowsCache);
+  // Re-render 4x4 HR chart too since destroyCharts wiped it
+  const withWhoop = allRowsCache.map(normalize).filter(Boolean).filter(r => r.hasWhoop);
+  render4x4HrChart(withWhoop);
+});
+document.getElementById('wk4-next').addEventListener('click', () => {
+  const next = isoForward(wk4Anchor, 28);
+  if (next > todayIso()) {
+    wk4Anchor = todayIso();
   } else {
-    gpsNote.textContent = `${gpsRuns.length} outdoor GPS run${gpsRuns.length === 1 ? '' : 's'} logged. Each point is one run.`;
-    const points = gpsRuns.map(r => ({
-      x: r.avgSpeedKmh,
-      y: r.avgHr,
-      date: r.date,
-      type: r.type,
-    }));
-    analyzeCharts.gps = new Chart(gpsCtx, {
-      type: 'scatter',
-      data: {
-        datasets: [{
-          label: 'Outdoor runs',
-          data: points,
-          backgroundColor: 'rgba(74, 222, 128, 0.8)',
-          borderColor: 'rgba(74, 222, 128, 1)',
-          pointRadius: 6,
-          pointHoverRadius: 8,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: (ctx) => {
-                const p = ctx.raw;
-                return `${p.date} (${p.type}): ${p.x} km/h, ${p.y} bpm`;
-              },
-            },
-          },
-        },
-        scales: {
-          x: {
-            title: { display: true, text: 'avg speed (km/h)', color: '#94a3b8' },
-            ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
-          },
-          y: {
-            title: { display: true, text: 'avg HR (bpm)', color: '#94a3b8' },
-            ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
-          },
-        },
-      },
-    });
+    wk4Anchor = next;
   }
+  destroyCharts();
+  renderFourWeekSummary(allRowsCache);
+  const withWhoop = allRowsCache.map(normalize).filter(Boolean).filter(r => r.hasWhoop);
+  render4x4HrChart(withWhoop);
+});
 
-  // ---- 4x4 max+avg HR over time ----
+// ============================================================
+// 4×4 HR trend — max and avg HR over time
+// ============================================================
+function render4x4HrChart(withWhoop) {
   const runs4x4 = withWhoop
     .filter(r => r.type === '4x4' && (r.maxHr != null || r.avgHr != null))
     .sort((a, b) => a.date.localeCompare(b.date));
