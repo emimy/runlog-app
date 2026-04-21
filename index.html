@@ -679,6 +679,72 @@
     height: 4px;
     border-radius: 50%;
   }
+  .cal-day .cal-mismatch {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #fbbf24;
+    box-shadow: 0 0 0 2px var(--surface);
+  }
+
+  /* VO2 list */
+  .vo2-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .vo2-row .vo2-date { color: var(--text-dim); min-width: 90px; }
+  .vo2-row .vo2-val { color: var(--text); font-weight: 600; flex: 1; }
+  .vo2-row .vo2-del {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 4px;
+    font-size: 12px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  /* Mismatch list */
+  .mismatch-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    background: rgba(251, 191, 36, 0.08);
+    border: 1px solid rgba(251, 191, 36, 0.2);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .mismatch-row:active { opacity: 0.7; }
+  .mismatch-row .mismatch-head {
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .mismatch-row .mismatch-label { color: #fcd34d; font-weight: 600; }
+  .mismatch-row .mismatch-date { color: var(--text-dim); font-size: 12px; }
+  .mismatch-row .mismatch-reason { color: var(--text); }
+
+  /* Modal mismatch banner */
+  .modal-mismatch {
+    background: rgba(251, 191, 36, 0.1);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    color: #fcd34d;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
 
   /* Filter chips */
   .cal-filters {
@@ -899,6 +965,24 @@
     </div>
 
     <div class="settings-group">
+      <h3>VO2 Max</h3>
+      <p id="vo2-status-text" style="font-size:13px;color:var(--text-dim);margin:0 0 12px 0">
+        Track your VO2 max readings over time.
+      </p>
+      <div class="field">
+        <label for="vo2-date">Date</label>
+        <input type="date" id="vo2-date">
+      </div>
+      <div class="field">
+        <label for="vo2-value">VO2 max (ml/kg/min)</label>
+        <input type="number" id="vo2-value" step="0.1" min="20" max="80" placeholder="e.g. 53">
+      </div>
+      <button class="primary" id="vo2-add-btn">Add / update reading</button>
+      <div class="btn-spacer"></div>
+      <div id="vo2-list"></div>
+    </div>
+
+    <div class="settings-group">
       <h3>Storage</h3>
       <div class="stat-row"><span class="label">Sessions logged</span><span class="value" id="stat-count">0</span></div>
       <div class="stat-row"><span class="label">Synced to GitHub</span><span class="value" id="stat-synced">—</span></div>
@@ -936,6 +1020,13 @@
 
   <!-- ANALYZE VIEW -->
   <section class="view" id="view-analyze">
+    <div class="analyze-section" id="analyze-vo2">
+      <h3>VO2 Max Trajectory</h3>
+      <div class="chart-note" id="vo2-headline" style="margin-bottom:8px"></div>
+      <div class="chart-wrap"><canvas id="chart-vo2"></canvas></div>
+      <div class="chart-note" id="vo2-pace"></div>
+    </div>
+
     <div class="analyze-section" id="analyze-calendar">
       <div class="cal-header">
         <button id="cal-prev" aria-label="Previous month">‹</button>
@@ -992,6 +1083,14 @@
       <div class="chart-wrap"><canvas id="chart-4x4-maxhr"></canvas></div>
     </div>
 
+    <div class="analyze-section" id="analyze-mismatches" style="display:none">
+      <h3>Mismatches</h3>
+      <div class="chart-note" style="margin-bottom:10px">
+        Sessions where the labeled type didn't match the actual zone profile. Tap to open.
+      </div>
+      <div id="mismatch-list"></div>
+    </div>
+
     <div class="empty-analyze" id="analyze-empty" style="display:none">
       No sessions yet with Whoop data. Log some runs and come back.
     </div>
@@ -1006,6 +1105,7 @@
       <button class="modal-close-x" id="modal-close-x" aria-label="Close">×</button>
     </div>
     <img id="modal-img" style="display:none">
+    <div id="modal-mismatch" class="modal-mismatch" style="display:none"></div>
     <dl class="kv" id="modal-kv"></dl>
     <div class="buttons">
       <button class="primary" id="modal-edit">Edit</button>
@@ -1019,6 +1119,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 
 <script>
 // ============================================================
@@ -1033,9 +1134,10 @@ const APP_VERSION = '2026-04-21-3';
 // IndexedDB setup
 // ============================================================
 const DB_NAME = 'runlog-db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = 'sessions';
 const CONFIG_STORE = 'config';
+const VO2_STORE = 'vo2max';
 let db;
 
 function openDB() {
@@ -1049,6 +1151,11 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains(CONFIG_STORE)) {
         d.createObjectStore(CONFIG_STORE, { keyPath: 'key' });
+      }
+      if (!d.objectStoreNames.contains(VO2_STORE)) {
+        // Keyed by date (YYYY-MM-DD); one reading per day max.
+        // Value schema: { date, value, createdAt, updatedAt, syncedAt? }
+        d.createObjectStore(VO2_STORE, { keyPath: 'date' });
       }
     };
     req.onsuccess = () => { db = req.result; resolve(db); };
@@ -1123,6 +1230,32 @@ function deleteSession(id) {
 function clearAll() {
   return new Promise((resolve, reject) => {
     const req = tx('readwrite').clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// VO2 max store helpers. Keyed by date (YYYY-MM-DD).
+function vo2Tx(mode = 'readonly') {
+  return db.transaction(VO2_STORE, mode).objectStore(VO2_STORE);
+}
+function putVo2(entry) {
+  return new Promise((resolve, reject) => {
+    const req = vo2Tx('readwrite').put(entry);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+function getAllVo2() {
+  return new Promise((resolve, reject) => {
+    const req = vo2Tx().getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+function deleteVo2(date) {
+  return new Promise((resolve, reject) => {
+    const req = vo2Tx('readwrite').delete(date);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
@@ -2072,6 +2205,16 @@ async function openModal(id) {
     modalImg.style.display = 'none';
   }
 
+  // Mismatch banner: shown only when labeled type disagrees with zone profile.
+  const mismatch = computeMismatch(s);
+  const mmBanner = document.getElementById('modal-mismatch');
+  if (mismatch) {
+    mmBanner.textContent = `⚠ ${mismatch}`;
+    mmBanner.style.display = 'block';
+  } else {
+    mmBanner.style.display = 'none';
+  }
+
   const rows = [
     ['Date', s.date],
     ['Type', meta.label],
@@ -2272,6 +2415,10 @@ async function renderSettings() {
 
   // Whoop connection section — separate function defined in the Whoop module
   renderWhoopSettings();
+
+  // VO2 max section
+  initVo2DatePicker();
+  renderVo2Settings();
 }
 
 document.getElementById('auto-pull-toggle').addEventListener('change', async (e) => {
@@ -2610,8 +2757,12 @@ async function renderAnalyze() {
   const raw = await getAllSessions();
   const rows = raw.map(normalize).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date));
   const withWhoop = rows.filter(r => r.hasWhoop);
+  const vo2 = (await getAllVo2()).sort((a, b) => a.date.localeCompare(b.date));
 
   destroyCharts();
+
+  // VO2 chart is always drawn (even with no data — shows empty state)
+  renderVo2Chart(vo2);
 
   // Calendar + filters work from any sessions — doesn't require Whoop.
   renderCalendarFilters();
@@ -2626,6 +2777,7 @@ async function renderAnalyze() {
   renderLast7Days(rows);
   renderFourWeekSummary(rows);
   render4x4HrChart(withWhoop);
+  renderMismatches(withWhoop);
 }
 
 // ============================================================
@@ -2743,6 +2895,16 @@ function renderCalendar(allSessions) {
           dots.appendChild(d);
         }
         div.appendChild(dots);
+      }
+
+      // Mismatch indicator: yellow dot in top-right if any session on this day
+      // has a computed mismatch between labeled type and actual zone profile.
+      const hasMismatch = sessions.some(s => computeMismatch(s) !== null);
+      if (hasMismatch) {
+        const m = document.createElement('span');
+        m.className = 'cal-mismatch';
+        m.title = 'Session type may not match zones';
+        div.appendChild(m);
       }
     }
 
@@ -3377,6 +3539,348 @@ async function enrichSessionWithWhoop(session) {
 }
 
 // ============================================================
+// VO2 max — storage, entry UI, chart, GitHub sync
+// ============================================================
+// Data model: one reading per date, YYYY-MM-DD keyed.
+// Stored in IndexedDB 'vo2max' store. Synced to GitHub as a single JSON file
+// at path 'vo2max.json' (small dataset, a single file is simpler than
+// per-entry files and matches how you'd manually edit a CSV).
+//
+// Goal trajectory (from training plan):
+//   2026-05-15 → 55.5  (midpoint of 55–56 by May 2026)
+//   2026-09-15 → 57    (Aug–Oct 2026)
+//   2027-04-15 → 60    (12-month goal)
+// The chart overlays these as a dashed reference line starting from the
+// most recent actual reading.
+
+const VO2_GOALS = [
+  { date: '2026-05-15', value: 55.5, label: 'May 2026: 55–56' },
+  { date: '2026-09-15', value: 57,   label: 'Aug–Oct 2026: 57' },
+  { date: '2027-04-15', value: 60,   label: 'Apr 2027: 60' },
+];
+
+// Seed data: your existing vo2max.csv contents. Used on first load if the
+// store is empty, so you don't have to re-enter 7 historical readings.
+const VO2_SEED = [
+  { date: '2025-11-01', value: 50 },
+  { date: '2025-12-01', value: 51 },
+  { date: '2026-01-01', value: 51 },
+  { date: '2026-02-01', value: 51 },
+  { date: '2026-03-01', value: 52 },
+  { date: '2026-04-01', value: 52 },
+  { date: '2026-04-19', value: 53 },
+];
+
+async function bootstrapVo2IfEmpty() {
+  const existing = await getAllVo2();
+  if (existing.length > 0) return false;
+  const now = new Date().toISOString();
+  for (const seed of VO2_SEED) {
+    await putVo2({
+      date: seed.date,
+      value: seed.value,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return true;
+}
+
+// GitHub sync of VO2 data as a single vo2max.json file.
+async function vo2SyncToGh() {
+  if (!ghConfig) return { ok: false, reason: 'no_github_config' };
+  try {
+    const entries = (await getAllVo2())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(e => ({ date: e.date, value: e.value }));
+    const path = 'vo2max.json';
+    const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${path}`;
+    const existingSha = await ghGetFileSha(path);
+    const body = {
+      message: `update: vo2max (${entries.length} readings)`,
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(entries, null, 2)))),
+    };
+    if (existingSha) body.sha = existingSha;
+    let res = await fetch(url, {
+      method: 'PUT',
+      headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 409 || res.status === 422) {
+      const fresh = await ghGetFileShaViaTree(path);
+      if (fresh) {
+        body.sha = fresh;
+        res = await fetch(url, {
+          method: 'PUT',
+          headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      }
+    }
+    if (!res.ok) {
+      const err = await res.text();
+      return { ok: false, error: `PUT ${path}: ${res.status} ${err.slice(0, 100)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// Settings UI: render the list + wire up Add button
+async function renderVo2Settings() {
+  const list = document.getElementById('vo2-list');
+  if (!list) return;
+  const entries = (await getAllVo2()).sort((a, b) => b.date.localeCompare(a.date));
+  if (entries.length === 0) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--text-dim)">No readings yet. Add one above.</div>';
+    return;
+  }
+  list.innerHTML = entries.map(e => `
+    <div class="vo2-row">
+      <span class="vo2-date">${e.date}</span>
+      <span class="vo2-val">${e.value} ml/kg/min</span>
+      <button class="vo2-del" data-date="${e.date}">Delete</button>
+    </div>
+  `).join('');
+  list.querySelectorAll('.vo2-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const date = btn.dataset.date;
+      if (!confirm(`Delete VO2 reading for ${date}?`)) return;
+      await deleteVo2(date);
+      toast('Deleted');
+      await renderVo2Settings();
+      if (ghConfig) {
+        const r = await vo2SyncToGh();
+        if (r.ok) toast('Synced to GitHub ✓');
+        else toast('Local delete ok, GitHub sync failed', true);
+      }
+    });
+  });
+}
+
+document.getElementById('vo2-add-btn').addEventListener('click', async () => {
+  const date = document.getElementById('vo2-date').value;
+  const value = parseFloat(document.getElementById('vo2-value').value);
+  if (!date) return toast('Pick a date', true);
+  if (!value || value < 20 || value > 80) return toast('VO2 must be 20–80', true);
+  const now = new Date().toISOString();
+  const existing = (await getAllVo2()).find(e => e.date === date);
+  await putVo2({
+    date,
+    value,
+    createdAt: existing ? existing.createdAt : now,
+    updatedAt: now,
+  });
+  toast(existing ? 'Updated ✓' : 'Added ✓');
+  document.getElementById('vo2-value').value = '';
+  await renderVo2Settings();
+  if (ghConfig) {
+    const r = await vo2SyncToGh();
+    if (r.ok) toast('Synced to GitHub ✓');
+    else toast('Local save ok, GitHub sync failed', true);
+  }
+});
+
+// Set the date input to today by default when settings tab is shown
+function initVo2DatePicker() {
+  const el = document.getElementById('vo2-date');
+  if (el && !el.value) el.value = new Date().toISOString().slice(0, 10);
+}
+
+// Chart rendering
+function renderVo2Chart(entries) {
+  const ctx = document.getElementById('chart-vo2').getContext('2d');
+  const headline = document.getElementById('vo2-headline');
+  const pace = document.getElementById('vo2-pace');
+
+  if (entries.length === 0) {
+    headline.textContent = 'No VO2 max readings yet. Add some in the Sync tab.';
+    pace.textContent = '';
+    analyzeCharts.vo2 = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [{ data: [] }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
+    });
+    return;
+  }
+
+  // Current value + delta from first reading
+  const first = entries[0];
+  const latest = entries[entries.length - 1];
+  const delta = latest.value - first.value;
+  headline.innerHTML = `Current: <strong>${latest.value}</strong> (${latest.date}) · ` +
+    `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} since ${first.date}`;
+
+  // Pace calculation: vs next goal, linearly
+  const now = new Date(latest.date + 'T00:00:00Z');
+  const nextGoal = VO2_GOALS.find(g => new Date(g.date + 'T00:00:00Z') > now);
+  if (nextGoal) {
+    const daysToGoal = (new Date(nextGoal.date + 'T00:00:00Z') - now) / 86400000;
+    const needed = nextGoal.value - latest.value;
+    const rateNeeded = needed / (daysToGoal / 30); // per month
+    let verdict;
+    if (needed <= 0) verdict = 'already at or above this goal ✓';
+    else if (rateNeeded < 0.5) verdict = 'on pace';
+    else if (rateNeeded < 1.0) verdict = 'tight but achievable';
+    else verdict = 'behind schedule';
+    pace.textContent = `Next goal: ${nextGoal.label}. Need +${needed.toFixed(1)} in ${Math.round(daysToGoal)} days (${rateNeeded.toFixed(2)}/month) — ${verdict}.`;
+  } else {
+    pace.textContent = 'All defined goals passed.';
+  }
+
+  // Build dataset: actual readings + goal trajectory from latest reading
+  const actualPoints = entries.map(e => ({ x: e.date, y: e.value }));
+  const goalPoints = [
+    { x: latest.date, y: latest.value },
+    ...VO2_GOALS
+      .filter(g => new Date(g.date) > new Date(latest.date))
+      .map(g => ({ x: g.date, y: g.value })),
+  ];
+
+  analyzeCharts.vo2 = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'Actual',
+          data: actualPoints,
+          borderColor: '#86efac',
+          backgroundColor: 'rgba(74, 222, 128, 0.15)',
+          tension: 0.3,
+          pointRadius: 5,
+          pointHoverRadius: 7,
+        },
+        {
+          label: 'Goal trajectory',
+          data: goalPoints,
+          borderColor: '#fbbf24',
+          backgroundColor: 'transparent',
+          borderDash: [5, 5],
+          pointRadius: 4,
+          pointStyle: 'triangle',
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#cbd5e1' } } },
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: 'month', displayFormats: { month: 'MMM yy' } },
+          ticks: { color: '#94a3b8' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          title: { display: true, text: 'ml/kg/min', color: '#94a3b8' },
+          ticks: { color: '#94a3b8' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          min: Math.min(45, Math.floor(first.value - 2)),
+          max: 62,
+        },
+      },
+    },
+  });
+}
+
+// ============================================================
+// Mismatch detection — labeled session type vs actual zone profile
+// ============================================================
+// Returns a human-readable reason string if the session's Whoop data
+// disagrees with its labeled type, else null.
+//
+// Rules (derived from user's training patterns):
+//   4x4:            expect ≥5 min Z5.  Flag if <2.
+//   hwpo_intervals: expect ≥3 min Z5 OR ≥8 min Z4+Z5. Flag if below both.
+//   z2:             expect <30% time in Z3+Z4. Flag if >30%.
+//   long_run:       flag if Z4+Z5 >25% of total time (became threshold).
+//
+// Sessions without Whoop data or with unknown types are never flagged.
+function computeMismatch(s) {
+  if (!s || !s._whoopData) return null;
+  const w = s._whoopData;
+  const z1 = w.z1_min || 0, z2 = w.z2_min || 0, z3 = w.z3_min || 0;
+  const z4 = w.z4_min || 0, z5 = w.z5_min || 0;
+  const total = z1 + z2 + z3 + z4 + z5;
+  if (total < 5) return null; // too short to assess
+
+  switch (s.type) {
+    case '4x4':
+      if (z5 < 2) return `Labeled 4×4 but only ${z5.toFixed(1)} min Z5 (expected ≥5).`;
+      return null;
+
+    case 'hwpo_intervals':
+      if (z5 < 3 && (z4 + z5) < 8) {
+        return `Labeled HWPO intervals but only ${z5.toFixed(1)} min Z5 / ${(z4 + z5).toFixed(1)} min Z4+Z5 (expected ≥3 Z5 or ≥8 Z4+Z5).`;
+      }
+      return null;
+
+    case 'z2': {
+      const hardPct = ((z3 + z4) / total) * 100;
+      if (hardPct > 30) {
+        return `Labeled Z2 but ${hardPct.toFixed(0)}% time in Z3+Z4 (expected <30% — drifted into threshold).`;
+      }
+      return null;
+    }
+
+    case 'long_run': {
+      const topPct = ((z4 + z5) / total) * 100;
+      if (topPct > 25) {
+        return `Labeled Long but ${topPct.toFixed(0)}% time in Z4+Z5 (expected <25% — became threshold session).`;
+      }
+      return null;
+    }
+
+    default:
+      return null;
+  }
+}
+
+function renderMismatches(rowsWithWhoop) {
+  const section = document.getElementById('analyze-mismatches');
+  const list = document.getElementById('mismatch-list');
+  if (!section || !list) return;
+
+  // Build list from enriched session objects — but computeMismatch expects
+  // raw sessions with _whoopData. rowsWithWhoop is from normalize() so we
+  // need to re-fetch the source sessions. Simpler: stash raw on the row.
+  // Actually normalize() drops _whoopData. Do the work with raw fetch.
+  // (We'll take the async hit — cheap enough for the session count.)
+
+  (async () => {
+    const raw = await getAllSessions();
+    const flagged = raw
+      .map(s => ({ s, reason: computeMismatch(s) }))
+      .filter(x => x.reason !== null)
+      .sort((a, b) => b.s.date.localeCompare(a.s.date));
+
+    if (flagged.length === 0) {
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = 'block';
+    list.innerHTML = flagged.map(({ s, reason }) => {
+      const meta = SESSION_LABELS[s.type] || SESSION_LABELS.other;
+      return `
+        <div class="mismatch-row" data-id="${s.id}">
+          <div class="mismatch-head">
+            <span class="mismatch-label">${meta.label}</span>
+            <span class="mismatch-date">${s.date}</span>
+          </div>
+          <div class="mismatch-reason">${reason}</div>
+        </div>
+      `;
+    }).join('');
+    list.querySelectorAll('.mismatch-row').forEach(row => {
+      row.addEventListener('click', () => openModal(row.dataset.id));
+    });
+  })();
+}
+
+// ============================================================
 // Self-update check
 // ============================================================
 // iOS aggressively caches PWAs added to the home screen. Without a service
@@ -3441,6 +3945,17 @@ async function updateCount() {
     await openDB();
     await loadGhConfig();
     await loadWhoopTokens();
+
+    // Bootstrap VO2 data on first use. Idempotent — only writes if the store
+    // is empty, so subsequent loads are no-ops.
+    const seeded = await bootstrapVo2IfEmpty();
+    if (seeded) {
+      // Push seeded data to GitHub so the user's laptop CSV stays the source
+      // of truth conceptually but both live in the repo from day one.
+      if (ghConfig) {
+        vo2SyncToGh().catch(e => console.warn('[vo2 initial sync]', e));
+      }
+    }
 
     // Handle OAuth callback if we landed here with ?code=...
     await whoopHandleCallback();
