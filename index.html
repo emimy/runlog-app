@@ -2663,10 +2663,14 @@ async function whoopRefresh() {
 }
 
 // Wrapper for calling Whoop API — auto-refreshes on 401 and retries once.
+// Routes through the Vercel proxy because Whoop's API doesn't send CORS
+// headers, so browsers block direct calls. Vercel is server-to-server,
+// not subject to CORS.
 async function whoopApi(path, params) {
   if (!whoopTokens) throw new Error('Not connected to Whoop');
   const doCall = async () => {
-    const url = new URL(`https://api.prod.whoop.com/developer/v2${path}`);
+    const url = new URL(`${WHOOP_BROKER}/api/whoop-proxy`);
+    url.searchParams.set('path', path);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         if (v != null) url.searchParams.set(k, v);
