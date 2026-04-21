@@ -1,4 +1,4 @@
-	<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -647,20 +647,14 @@
     color: var(--text);
     font-weight: 500;
   }
-  .cal-day.intensity-hard {
-    background: rgba(239, 68, 68, 0.2);
-    color: #fca5a5;
-  }
-  .cal-day.intensity-moderate {
-    background: rgba(245, 158, 11, 0.2);
-    color: #fcd34d;
-  }
-  .cal-day.intensity-easy {
-    background: rgba(74, 222, 128, 0.2);
-    color: #86efac;
-  }
+  /* Per-session-type calendar colors */
+  .cal-day.type-4x4         { background: rgba(239, 68, 68, 0.25);  color: #fca5a5; }
+  .cal-day.type-hwpo        { background: rgba(168, 85, 247, 0.25); color: #d8b4fe; }
+  .cal-day.type-long_run    { background: rgba(245, 158, 11, 0.25); color: #fcd34d; }
+  .cal-day.type-z2          { background: rgba(74, 222, 128, 0.25); color: #86efac; }
+  .cal-day.type-other       { background: rgba(148, 163, 184, 0.25); color: #cbd5e1; }
   .cal-day.multi {
-    background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(74, 222, 128, 0.2));
+    /* overridden by an inline background in renderCalendar for multi-type days */
     color: var(--text);
   }
   .cal-day .cal-dot-row {
@@ -674,6 +668,50 @@
     height: 4px;
     border-radius: 50%;
   }
+
+  /* Filter chips */
+  .cal-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .cal-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .cal-filter-chip.active {
+    color: var(--text);
+  }
+  .cal-filter-chip .cal-filter-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: 0.8;
+  }
+  .cal-filter-chip:not(.active) {
+    opacity: 0.4;
+  }
+  .cal-filter-chip:not(.active) .cal-filter-swatch {
+    background: var(--text-dim);
+  }
+  .cal-filter-chip.active.type-4x4      { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
+  .cal-filter-chip.active.type-hwpo     { color: #d8b4fe; border-color: rgba(168, 85, 247, 0.4); }
+  .cal-filter-chip.active.type-long_run { color: #fcd34d; border-color: rgba(245, 158, 11, 0.4); }
+  .cal-filter-chip.active.type-z2       { color: #86efac; border-color: rgba(74, 222, 128, 0.4); }
+
   .cal-legend {
     display: flex;
     flex-wrap: wrap;
@@ -889,6 +927,7 @@
         <div class="cal-title" id="cal-title" role="button">Month</div>
         <button id="cal-next" aria-label="Next month">›</button>
       </div>
+      <div class="cal-filters" id="cal-filters"></div>
       <div class="cal-dow">
         <div class="cal-dow-label">Mon</div>
         <div class="cal-dow-label">Tue</div>
@@ -899,56 +938,25 @@
         <div class="cal-dow-label">Sun</div>
       </div>
       <div class="cal-grid" id="cal-grid"></div>
-      <div class="cal-legend">
-        <div class="cal-legend-item"><span class="cal-legend-swatch" style="background:rgba(239,68,68,0.5)"></span>Hard</div>
-        <div class="cal-legend-item"><span class="cal-legend-swatch" style="background:rgba(245,158,11,0.5)"></span>Moderate</div>
-        <div class="cal-legend-item"><span class="cal-legend-swatch" style="background:rgba(74,222,128,0.5)"></span>Easy</div>
-      </div>
     </div>
 
     <div class="analyze-section" id="analyze-summary">
-      <h3>This Week</h3>
+      <h3>Last 7 days</h3>
       <div class="kpi-grid">
-        <div class="kpi"><div class="val" id="kpi-z5">–</div><div class="lbl">Z5 min</div></div>
-        <div class="kpi"><div class="val" id="kpi-hard">–</div><div class="lbl">hard sessions</div></div>
-        <div class="kpi"><div class="val" id="kpi-mins">–</div><div class="lbl">run minutes</div></div>
+        <div class="kpi"><div class="val" id="kpi-4x4">–</div><div class="lbl"># 4×4</div></div>
+        <div class="kpi"><div class="val" id="kpi-z45">–</div><div class="lbl">Z4+Z5 min</div></div>
+        <div class="kpi"><div class="val" id="kpi-z2mins">–</div><div class="lbl">Z2 run min</div></div>
       </div>
     </div>
 
     <div class="analyze-section">
-      <h3>Stimulus Quality</h3>
+      <h3>4-week Summary</h3>
 
-      <h4>Z5 minutes per 4×4 session, by day of week</h4>
-      <div class="chart-wrap"><canvas id="chart-z5-bydow"></canvas></div>
-      <div class="chart-note" id="note-z5-bydow"></div>
+      <h4>Z4+Z5 minutes per week <span id="note-z45-total" class="cal-legend-item" style="font-weight:400;font-size:12px;color:var(--text-dim);margin-left:6px"></span></h4>
+      <div class="chart-wrap"><canvas id="chart-weekly-z45"></canvas></div>
 
-      <h4>Rolling 7-day Z5 total</h4>
-      <div class="chart-wrap"><canvas id="chart-z5-rolling"></canvas></div>
-
-      <h4>Sessions</h4>
-      <div class="table-scroll">
-        <table class="analyze-table" id="table-sessions">
-          <thead><tr>
-            <th>Date</th><th>Type</th><th>Min</th>
-            <th>Z5</th><th>Z4</th><th>Max HR</th><th>Strain</th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="analyze-section">
-      <h3>Load &amp; Periodization</h3>
-
-      <h4>Weekly run minutes, stacked by zone</h4>
-      <div class="chart-wrap"><canvas id="chart-weekly-zones"></canvas></div>
-
-      <h4>Weekly strain from running</h4>
-      <div class="chart-wrap"><canvas id="chart-weekly-strain"></canvas></div>
-
-      <h4>Weekly intensity distribution (% time per zone)</h4>
-      <div class="chart-wrap"><canvas id="chart-weekly-pct"></canvas></div>
-      <div class="chart-note">Polarization check — high Z1/Z2 and Z4/Z5 with thin Z3 is the target.</div>
+      <h4>Zone 2 run minutes per week <span id="note-z2-total" class="cal-legend-item" style="font-weight:400;font-size:12px;color:var(--text-dim);margin-left:6px"></span></h4>
+      <div class="chart-wrap"><canvas id="chart-weekly-z2"></canvas></div>
     </div>
 
     <div class="analyze-section">
@@ -958,12 +966,8 @@
       <div class="chart-wrap"><canvas id="chart-gps-pace-hr"></canvas></div>
       <div class="chart-note" id="note-gps"></div>
 
-      <h4>4×4 max HR over time</h4>
+      <h4>4×4 HR over time</h4>
       <div class="chart-wrap"><canvas id="chart-4x4-maxhr"></canvas></div>
-
-      <h4>Zone-2 drift detector</h4>
-      <div id="drift-list"></div>
-      <div class="chart-note">Sessions labelled Z2 where Z3+Z4 time exceeded 30% of duration.</div>
     </div>
 
     <div class="empty-analyze" id="analyze-empty" style="display:none">
@@ -2528,6 +2532,43 @@ function destroyCharts() {
   Object.keys(analyzeCharts).forEach(k => delete analyzeCharts[k]);
 }
 
+// ============================================================
+// Analyze tab — render functions
+// ============================================================
+// Sections are rendered top-to-bottom:
+//   1. Calendar (month picker + per-type coloring + type filters)
+//   2. Last 7 days KPIs (# 4x4, Z4+Z5 min, Z2 run min)
+//   3. 4-week summary (Z4+Z5 bars, Z2 bars)
+//   4. Pace & HR Calibration (GPS scatter, 4x4 max+avg HR)
+
+// --- Type colors & filter chips ---
+// Single source of truth for type styling. Used by both the calendar cells
+// and the filter chips so they stay visually consistent.
+const TYPE_COLORS = {
+  '4x4':            { label: '4×4',    hex: '#f87171', css: 'type-4x4' },
+  'hwpo_intervals': { label: 'HWPO',   hex: '#c084fc', css: 'type-hwpo' },
+  'long_run':       { label: 'Long',   hex: '#fbbf24', css: 'type-long_run' },
+  'z2':             { label: 'Z2',     hex: '#4ade80', css: 'type-z2' },
+  'gps_outdoor':    { label: 'GPS',    hex: '#4ade80', css: 'type-z2' },
+  'other':          { label: 'Other',  hex: '#94a3b8', css: 'type-other' },
+};
+// Which types are filter chips (user can show/hide). Everything else always shows.
+const FILTER_TYPES = ['4x4', 'hwpo_intervals', 'long_run', 'z2'];
+
+// Filter state: sessionStorage so it persists across re-renders within a session.
+function getCalendarFilters() {
+  try {
+    const raw = sessionStorage.getItem('cal_filters');
+    if (!raw) return new Set(FILTER_TYPES);
+    return new Set(JSON.parse(raw));
+  } catch (e) {
+    return new Set(FILTER_TYPES);
+  }
+}
+function setCalendarFilters(set) {
+  sessionStorage.setItem('cal_filters', JSON.stringify(Array.from(set)));
+}
+
 async function renderAnalyze() {
   if (typeof Chart === 'undefined') {
     const el = document.getElementById('analyze-empty');
@@ -2542,7 +2583,8 @@ async function renderAnalyze() {
 
   destroyCharts();
 
-  // Calendar works with any sessions — doesn't require Whoop enrichment.
+  // Calendar + filters work from any sessions — doesn't require Whoop.
+  renderCalendarFilters();
   renderCalendar(raw);
 
   if (withWhoop.length === 0) {
@@ -2551,23 +2593,41 @@ async function renderAnalyze() {
   }
   document.getElementById('analyze-empty').style.display = 'none';
 
-  renderThisWeek(rows);
-  renderStimulusQuality(withWhoop);
-  renderLoad(withWhoop);
+  renderLast7Days(rows);
+  renderFourWeekSummary(rows);
   renderCalibration(rows, withWhoop);
 }
 
-// --- Calendar ---
-// Shows one month at a time with month-picker arrows. Days that have sessions
-// are colored by the session's intensity tier (hard/moderate/easy from
-// SESSION_LABELS). Tapping a colored day opens the session's detail modal.
-// If a day has multiple sessions, tapping opens the first; a small dot row
-// at the bottom of the cell indicates additional sessions.
-
-// Module state persists across re-renders so navigation feels natural.
+// ============================================================
+// Calendar (month picker, per-type colors, filter chips)
+// ============================================================
 let calendarViewDate = new Date();
 
 function pad2(n) { return String(n).padStart(2, '0'); }
+
+function renderCalendarFilters() {
+  const container = document.getElementById('cal-filters');
+  if (!container) return;
+  const active = getCalendarFilters();
+  container.innerHTML = '';
+  for (const t of FILTER_TYPES) {
+    const meta = TYPE_COLORS[t];
+    const chip = document.createElement('button');
+    chip.className = `cal-filter-chip ${meta.css}${active.has(t) ? ' active' : ''}`;
+    chip.type = 'button';
+    chip.innerHTML = `<span class="cal-filter-swatch"></span>${meta.label}`;
+    chip.addEventListener('click', async () => {
+      const set = getCalendarFilters();
+      if (set.has(t)) set.delete(t); else set.add(t);
+      setCalendarFilters(set);
+      // Re-render chips (for active state) and the calendar grid
+      renderCalendarFilters();
+      const all = await getAllSessions();
+      renderCalendar(all);
+    });
+    container.appendChild(chip);
+  }
+}
 
 function renderCalendar(allSessions) {
   const grid = document.getElementById('cal-grid');
@@ -2575,46 +2635,44 @@ function renderCalendar(allSessions) {
   if (!grid || !title) return;
 
   const year = calendarViewDate.getFullYear();
-  const month = calendarViewDate.getMonth(); // 0-indexed
-
-  // Title: "April 2026"
+  const month = calendarViewDate.getMonth();
   const monthName = calendarViewDate.toLocaleString('en-US', { month: 'long' });
   title.textContent = `${monthName} ${year}`;
 
-  // Build lookup of sessions by local-date (YYYY-MM-DD).
+  // Apply filter: sessions of hidden types are dropped before lookup.
+  // Types not in FILTER_TYPES (e.g. 'other', 'gps_outdoor') always show.
+  const filters = getCalendarFilters();
+  const visible = allSessions.filter(s => {
+    if (!FILTER_TYPES.includes(s.type)) return true;
+    return filters.has(s.type);
+  });
+
   const byDate = {};
-  for (const s of allSessions) {
+  for (const s of visible) {
     if (!s.date) continue;
     (byDate[s.date] = byDate[s.date] || []).push(s);
   }
 
-  // Figure out what cells to render.
-  // First of month, and figure out what day-of-week (ISO: Mon=0..Sun=6).
   const firstOfMonth = new Date(year, month, 1);
-  const firstDow = (firstOfMonth.getDay() + 6) % 7; // convert Sun=0..Sat=6 to Mon=0..Sun=6
-  // Days in this month
+  const firstDow = (firstOfMonth.getDay() + 6) % 7; // ISO: Mon=0
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  // Leading days from previous month
   const prevMonthLastDay = new Date(year, month, 0).getDate();
-  // Total cells: 6 rows × 7 cols = 42, always (gives a clean grid)
+
   const cells = [];
   for (let i = 0; i < firstDow; i++) {
-    const day = prevMonthLastDay - firstDow + 1 + i;
-    cells.push({ day, month: month - 1, outside: true });
+    cells.push({ day: prevMonthLastDay - firstDow + 1 + i, month: month - 1, outside: true });
   }
   for (let d = 1; d <= daysInMonth; d++) {
     cells.push({ day: d, month, outside: false });
   }
   while (cells.length < 42) {
-    const nextDay = cells.length - firstDow - daysInMonth + 1;
-    cells.push({ day: nextDay, month: month + 1, outside: true });
+    cells.push({ day: cells.length - firstDow - daysInMonth + 1, month: month + 1, outside: true });
   }
 
   const todayIso = new Date().toISOString().slice(0, 10);
 
   grid.innerHTML = '';
   for (const c of cells) {
-    // Build ISO date for this cell. Month may be -1 or 12 across year boundaries.
     const cellDate = new Date(year, c.month, c.day);
     const iso = `${cellDate.getFullYear()}-${pad2(cellDate.getMonth() + 1)}-${pad2(cellDate.getDate())}`;
     const sessions = byDate[iso] || [];
@@ -2626,20 +2684,25 @@ function renderCalendar(allSessions) {
 
     if (sessions.length > 0) {
       div.classList.add('has-session');
-      // Determine the most-intense tier present (hard > moderate > easy)
-      const tiers = sessions.map(s => (SESSION_LABELS[s.type] || SESSION_LABELS.other).intensity);
-      const tier = tiers.includes('hard') ? 'hard'
-                 : tiers.includes('moderate') ? 'moderate' : 'easy';
-      if (sessions.length > 1 && new Set(tiers).size > 1) {
-        div.classList.add('multi');
+      // Collect distinct types (in session order)
+      const types = [];
+      for (const s of sessions) {
+        if (!types.includes(s.type)) types.push(s.type);
+      }
+      if (types.length === 1) {
+        const meta = TYPE_COLORS[types[0]] || TYPE_COLORS.other;
+        div.classList.add(meta.css);
       } else {
-        div.classList.add('intensity-' + tier);
+        // Multi-type day: gradient using the first two type colors
+        const c1 = (TYPE_COLORS[types[0]] || TYPE_COLORS.other).hex;
+        const c2 = (TYPE_COLORS[types[1]] || TYPE_COLORS.other).hex;
+        div.classList.add('multi');
+        div.style.background = `linear-gradient(135deg, ${c1}40, ${c2}40)`;
       }
       const mostRecent = sessions.reduce((a, b) =>
         (a.createdAt || '') > (b.createdAt || '') ? a : b);
       div.addEventListener('click', () => openModal(mostRecent.id));
 
-      // Additional-sessions indicator
       if (sessions.length > 1) {
         const dots = document.createElement('div');
         dots.className = 'cal-dot-row';
@@ -2661,20 +2724,12 @@ function renderCalendar(allSessions) {
 }
 
 document.getElementById('cal-prev').addEventListener('click', async () => {
-  calendarViewDate = new Date(
-    calendarViewDate.getFullYear(),
-    calendarViewDate.getMonth() - 1,
-    1
-  );
+  calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1);
   const raw = await getAllSessions();
   renderCalendar(raw);
 });
 document.getElementById('cal-next').addEventListener('click', async () => {
-  calendarViewDate = new Date(
-    calendarViewDate.getFullYear(),
-    calendarViewDate.getMonth() + 1,
-    1
-  );
+  calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1);
   const raw = await getAllSessions();
   renderCalendar(raw);
 });
@@ -2684,286 +2739,227 @@ document.getElementById('cal-title').addEventListener('click', async () => {
   renderCalendar(raw);
 });
 
-function renderThisWeek(rows) {
-  const todayKey = isoWeekKey(new Date().toISOString().slice(0, 10));
-  const wk = rows.filter(r => isoWeekKey(r.date) === todayKey);
-  const z5 = wk.reduce((s, r) => s + r.z5, 0);
-  const mins = wk.reduce((s, r) => s + r.mins, 0);
-  const hardTypes = new Set(['4x4', 'hwpo_intervals', 'long_run']);
-  const hard = wk.filter(r => hardTypes.has(r.type)).length;
+// ============================================================
+// Last 7 days KPIs
+// ============================================================
+// Rolling window: today minus 6 days inclusive (so 7 total days ending today).
+// NOT the ISO week starting Monday — different semantic from the old "This Week".
+function renderLast7Days(rows) {
+  const today = new Date().toISOString().slice(0, 10);
+  const sevenAgo = new Date(Date.now() - 6 * 86400 * 1000).toISOString().slice(0, 10);
+  const wk = rows.filter(r => r.date >= sevenAgo && r.date <= today);
 
-  const z5El = document.getElementById('kpi-z5');
-  z5El.textContent = z5.toFixed(1);
-  z5El.className = 'val ' + (z5 >= 8 ? 'good' : z5 >= 4 ? '' : 'warn');
+  // # 4x4 sessions (treating hwpo_intervals separately — only label "4x4" here)
+  const count4x4 = wk.filter(r => r.type === '4x4').length;
 
-  document.getElementById('kpi-hard').textContent = hard;
-  document.getElementById('kpi-mins').textContent = Math.round(mins);
+  // Z4 + Z5 minutes across all sessions in window
+  const z45 = wk.reduce((s, r) => s + (r.z4 || 0) + (r.z5 || 0), 0);
+
+  // Z2 run minutes — sessions typed as z2, sum total minutes (any zone).
+  // Reason: you specifically said "Z2 run minutes (even if i'm in zone 3)" — the
+  // duration of sessions *labeled* as z2, not time spent in the Z2 zone.
+  const z2Mins = wk.filter(r => r.type === 'z2').reduce((s, r) => s + (r.mins || 0), 0);
+
+  document.getElementById('kpi-4x4').textContent = count4x4;
+  document.getElementById('kpi-z45').textContent = Math.round(z45);
+  document.getElementById('kpi-z2mins').textContent = Math.round(z2Mins);
 }
 
-function renderStimulusQuality(rows) {
-  const fourByFour = rows.filter(r => r.type === '4x4');
+// ============================================================
+// 4-week summary (Z4+Z5, Z2 minutes per week)
+// ============================================================
+// "Week" = rolling 7-day bucket ending at the current day. 4 buckets total.
+// Bucket 0 = today..today-6, Bucket 1 = today-7..today-13, etc.
+// Rendered oldest-to-newest on the x-axis.
+function renderFourWeekSummary(rows) {
+  const todayMs = Date.now();
+  const DAY = 86400 * 1000;
+  const buckets = [];
+  for (let w = 3; w >= 0; w--) {
+    const end = new Date(todayMs - w * 7 * DAY);
+    const start = new Date(todayMs - (w * 7 + 6) * DAY);
+    const startIso = start.toISOString().slice(0, 10);
+    const endIso = end.toISOString().slice(0, 10);
+    const in_ = rows.filter(r => r.date >= startIso && r.date <= endIso);
+    const z45 = in_.reduce((s, r) => s + (r.z4 || 0) + (r.z5 || 0), 0);
+    const z2Mins = in_.filter(r => r.type === 'z2').reduce((s, r) => s + (r.mins || 0), 0);
+    buckets.push({
+      label: `${start.getDate()}/${start.getMonth() + 1}–${end.getDate()}/${end.getMonth() + 1}`,
+      z45: Math.round(z45),
+      z2: Math.round(z2Mins),
+    });
+  }
 
-  const byDow = {};
-  fourByFour.forEach(r => { (byDow[r.dow] = byDow[r.dow] || []).push(r); });
-  const datasets = Object.entries(byDow).map(([dow, arr]) => ({
-    label: DOW[dow] + ` (n=${arr.length})`,
-    data: arr.map(r => ({ x: r.date, y: r.z5 })),
-    backgroundColor:
-      dow === '1' ? '#4ade80' :
-      dow === '4' ? '#ef4444' :
-      '#888',
-    borderColor:
-      dow === '1' ? '#22c55e' :
-      dow === '4' ? '#b91c1c' :
-      '#666',
-    pointRadius: 6,
-    pointHoverRadius: 8,
-  }));
-  analyzeCharts.z5dow = new Chart(document.getElementById('chart-z5-bydow'), {
-    type: 'scatter',
-    data: { datasets },
+  // Headline totals (last 28 days, sum across all 4 buckets)
+  const total28_z45 = buckets.reduce((s, b) => s + b.z45, 0);
+  const total28_z2  = buckets.reduce((s, b) => s + b.z2, 0);
+  const n_z45 = document.getElementById('note-z45-total');
+  const n_z2  = document.getElementById('note-z2-total');
+  if (n_z45) n_z45.textContent = `(last 28d: ${total28_z45} min total)`;
+  if (n_z2)  n_z2.textContent  = `(last 28d: ${total28_z2} min total)`;
+
+  // Z4+Z5 chart
+  const ctx1 = document.getElementById('chart-weekly-z45').getContext('2d');
+  analyzeCharts.z45 = new Chart(ctx1, {
+    type: 'bar',
+    data: {
+      labels: buckets.map(b => b.label),
+      datasets: [{
+        label: 'Z4+Z5 minutes',
+        data: buckets.map(b => b.z45),
+        backgroundColor: 'rgba(239, 68, 68, 0.6)',
+        borderColor: 'rgba(239, 68, 68, 0.9)',
+        borderWidth: 1,
+      }],
+    },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
       scales: {
-        x: { type: 'category', ticks: { color: '#888', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#2a2a2a' } },
-        y: { beginAtZero: true, title: { display: true, text: 'Z5 min', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true },
       },
-      plugins: { legend: { labels: { color: '#e8e8e8', font: { size: 11 } } } },
     },
   });
 
-  const mon = fourByFour.filter(r => r.dow === 1);
-  const thu = fourByFour.filter(r => r.dow === 4);
-  const avg = arr => arr.length ? (arr.reduce((s, r) => s + r.z5, 0) / arr.length) : 0;
-  const note = document.getElementById('note-z5-bydow');
-  if (mon.length || thu.length) {
-    note.textContent = `Monday avg Z5: ${avg(mon).toFixed(1)} min (n=${mon.length}). ` +
-                       `Thursday avg Z5: ${avg(thu).toFixed(1)} min (n=${thu.length}).`;
-  } else {
-    note.textContent = '';
-  }
+  // Z2 chart
+  const ctx2 = document.getElementById('chart-weekly-z2').getContext('2d');
+  analyzeCharts.z2 = new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels: buckets.map(b => b.label),
+      datasets: [{
+        label: 'Z2 run minutes',
+        data: buckets.map(b => b.z2),
+        backgroundColor: 'rgba(74, 222, 128, 0.6)',
+        borderColor: 'rgba(74, 222, 128, 0.9)',
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true },
+      },
+    },
+  });
+}
 
-  const byDate = {};
-  rows.forEach(r => { byDate[r.date] = (byDate[r.date] || 0) + r.z5; });
-  const allDates = Object.keys(byDate).sort();
-  if (allDates.length) {
-    const start = new Date(allDates[0] + 'T12:00:00');
-    const end = new Date(allDates[allDates.length - 1] + 'T12:00:00');
-    const days = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      days.push(d.toISOString().slice(0, 10));
-    }
-    const rolling = days.map((dateStr, i) => {
-      let sum = 0;
-      for (let j = Math.max(0, i - 6); j <= i; j++) sum += (byDate[days[j]] || 0);
-      return sum;
+// ============================================================
+// Pace & HR Calibration
+// ============================================================
+// Section 1: GPS scatter. Bug fix: old code required type === 'gps_outdoor'
+// but user logs outdoor runs as long_run with equipment=outdoor. New filter:
+// equipment === 'outdoor' AND we have pace + avg HR.
+// Section 2: 4x4 HR over time — show BOTH max and avg HR lines.
+function renderCalibration(allRows, withWhoop) {
+  // ---- GPS scatter ----
+  const gpsRuns = withWhoop.filter(r =>
+    r.equipment === 'outdoor' && r.avgSpeedKmh && r.avgHr);
+  const gpsNote = document.getElementById('note-gps');
+  const gpsCtx = document.getElementById('chart-gps-pace-hr').getContext('2d');
+
+  if (gpsRuns.length === 0) {
+    gpsNote.textContent = 'No outdoor GPS runs with pace + HR yet.';
+    analyzeCharts.gps = new Chart(gpsCtx, {
+      type: 'scatter',
+      data: { datasets: [{ data: [] }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
     });
-    analyzeCharts.z5rolling = new Chart(document.getElementById('chart-z5-rolling'), {
-      type: 'line',
+  } else {
+    gpsNote.textContent = `${gpsRuns.length} outdoor GPS run${gpsRuns.length === 1 ? '' : 's'} logged. Each point is one run.`;
+    const points = gpsRuns.map(r => ({
+      x: r.avgSpeedKmh,
+      y: r.avgHr,
+      date: r.date,
+      type: r.type,
+    }));
+    analyzeCharts.gps = new Chart(gpsCtx, {
+      type: 'scatter',
       data: {
-        labels: days,
         datasets: [{
-          label: '7-day Z5 (min)',
-          data: rolling,
-          borderColor: '#a855f7',
-          backgroundColor: 'rgba(168, 85, 247, 0.15)',
-          fill: true,
-          tension: 0.25,
-          pointRadius: 0,
+          label: 'Outdoor runs',
+          data: points,
+          backgroundColor: 'rgba(74, 222, 128, 0.8)',
+          borderColor: 'rgba(74, 222, 128, 1)',
+          pointRadius: 6,
+          pointHoverRadius: 8,
         }],
       },
       options: {
-        responsive: true, maintainAspectRatio: false,
-        scales: {
-          x: { ticks: { color: '#888', font: { size: 10 }, maxTicksLimit: 8 }, grid: { display: false } },
-          y: { beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const p = ctx.raw;
+                return `${p.date} (${p.type}): ${p.x} km/h, ${p.y} bpm`;
+              },
+            },
+          },
         },
-        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            title: { display: true, text: 'avg speed (km/h)', color: '#94a3b8' },
+            ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+          y: {
+            title: { display: true, text: 'avg HR (bpm)', color: '#94a3b8' },
+            ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+        },
       },
     });
   }
 
-  const tbody = document.querySelector('#table-sessions tbody');
-  tbody.innerHTML = '';
-  const recent = [...rows].reverse().slice(0, 30);
-  for (const r of recent) {
-    const tr = document.createElement('tr');
-    if (r.type === '4x4' && r.dow === 1) tr.className = 'highlight-mon';
-    if (r.type === '4x4' && r.dow === 4) tr.className = 'highlight-thu';
-    tr.innerHTML = `
-      <td>${r.date.slice(5)} ${DOW[r.dow]}</td>
-      <td>${(SESSION_LABELS[r.type] || SESSION_LABELS.other).label}</td>
-      <td>${Math.round(r.mins)}</td>
-      <td>${r.z5.toFixed(1)}</td>
-      <td>${r.z4.toFixed(1)}</td>
-      <td>${r.maxHr ?? '–'}</td>
-      <td>${r.strain != null ? r.strain.toFixed(1) : '–'}</td>`;
-    tbody.appendChild(tr);
-  }
-}
+  // ---- 4x4 max+avg HR over time ----
+  const runs4x4 = withWhoop
+    .filter(r => r.type === '4x4' && (r.maxHr != null || r.avgHr != null))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
-function renderLoad(rows) {
-  const byWeek = {};
-  rows.forEach(r => {
-    const k = isoWeekKey(r.date);
-    if (!byWeek[k]) byWeek[k] = { z1: 0, z2: 0, z3: 0, z4: 0, z5: 0, strain: 0, mins: 0 };
-    byWeek[k].z1 += r.z1;
-    byWeek[k].z2 += r.z2;
-    byWeek[k].z3 += r.z3;
-    byWeek[k].z4 += r.z4;
-    byWeek[k].z5 += r.z5;
-    byWeek[k].mins += r.mins;
-    if (r.strain != null) byWeek[k].strain += r.strain;
-  });
-  const weeks = Object.keys(byWeek).sort();
-  const zoneKeys = ['z1', 'z2', 'z3', 'z4', 'z5'];
-
-  analyzeCharts.weekzones = new Chart(document.getElementById('chart-weekly-zones'), {
-    type: 'bar',
+  const hrCtx = document.getElementById('chart-4x4-maxhr').getContext('2d');
+  analyzeCharts.maxhr = new Chart(hrCtx, {
+    type: 'line',
     data: {
-      labels: weeks,
-      datasets: zoneKeys.map(z => ({
-        label: z.toUpperCase(),
-        data: weeks.map(w => byWeek[w][z]),
-        backgroundColor: ZONE_COLORS[z],
-      })),
+      labels: runs4x4.map(r => r.date.slice(5)),
+      datasets: [
+        {
+          label: 'Max HR',
+          data: runs4x4.map(r => r.maxHr),
+          borderColor: 'rgba(239, 68, 68, 1)',
+          backgroundColor: 'rgba(239, 68, 68, 0.15)',
+          tension: 0.3,
+          pointRadius: 4,
+        },
+        {
+          label: 'Avg HR',
+          data: runs4x4.map(r => r.avgHr),
+          borderColor: 'rgba(147, 197, 253, 1)',
+          backgroundColor: 'rgba(147, 197, 253, 0.15)',
+          tension: 0.3,
+          pointRadius: 4,
+        },
+      ],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#cbd5e1' } } },
       scales: {
-        x: { stacked: true, ticks: { color: '#888', font: { size: 10 } }, grid: { display: false } },
-        y: { stacked: true, ticks: { color: '#888' }, grid: { color: '#2a2a2a' }, title: { display: true, text: 'minutes', color: '#888' } },
-      },
-      plugins: { legend: { labels: { color: '#e8e8e8', font: { size: 11 } } } },
-    },
-  });
-
-  analyzeCharts.weekstrain = new Chart(document.getElementById('chart-weekly-strain'), {
-    type: 'bar',
-    data: {
-      labels: weeks,
-      datasets: [{
-        label: 'Total strain (running)',
-        data: weeks.map(w => byWeek[w].strain),
-        backgroundColor: '#4ade80',
-      }],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      scales: {
-        x: { ticks: { color: '#888', font: { size: 10 } }, grid: { display: false } },
-        y: { ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
-      },
-      plugins: { legend: { display: false } },
-    },
-  });
-
-  analyzeCharts.weekpct = new Chart(document.getElementById('chart-weekly-pct'), {
-    type: 'bar',
-    data: {
-      labels: weeks,
-      datasets: zoneKeys.map(z => ({
-        label: z.toUpperCase(),
-        data: weeks.map(w => {
-          const total = zoneKeys.reduce((s, k) => s + byWeek[w][k], 0);
-          return total > 0 ? (byWeek[w][z] / total) * 100 : 0;
-        }),
-        backgroundColor: ZONE_COLORS[z],
-      })),
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      scales: {
-        x: { stacked: true, ticks: { color: '#888', font: { size: 10 } }, grid: { display: false } },
-        y: { stacked: true, ticks: { color: '#888', callback: v => v + '%' }, grid: { color: '#2a2a2a' }, max: 100 },
-      },
-      plugins: { legend: { labels: { color: '#e8e8e8', font: { size: 11 } } } },
-    },
-  });
-}
-
-function renderCalibration(allRows, withWhoop) {
-  const gps = withWhoop.filter(r =>
-    r.type === 'gps_outdoor' && r.equipment === 'outdoor' && r.avgSpeedKmh && r.avgHr);
-  analyzeCharts.gps = new Chart(document.getElementById('chart-gps-pace-hr'), {
-    type: 'scatter',
-    data: {
-      datasets: [{
-        label: 'Outdoor runs',
-        data: gps.map(r => ({ x: r.avgSpeedKmh, y: r.avgHr, _date: r.date })),
-        backgroundColor: '#4ade80',
-        pointRadius: 6,
-      }],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      scales: {
-        x: { title: { display: true, text: 'avg speed km/h', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
-        y: { title: { display: true, text: 'avg HR bpm', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#2a2a2a' } },
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              const p = ctx.raw;
-              return `${p._date}: ${p.x.toFixed(2)} km/h @ ${p.y} bpm`;
-            },
-          },
+        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: {
+          title: { display: true, text: 'bpm', color: '#94a3b8' },
+          ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
         },
       },
     },
   });
-  document.getElementById('note-gps').textContent =
-    gps.length < 3
-      ? `Only ${gps.length} outdoor GPS run${gps.length === 1 ? '' : 's'} logged. Calibration line needs more points.`
-      : `${gps.length} outdoor runs plotted.`;
-
-  const f = withWhoop.filter(r => r.type === '4x4' && r.maxHr);
-  analyzeCharts.maxhr = new Chart(document.getElementById('chart-4x4-maxhr'), {
-    type: 'line',
-    data: {
-      labels: f.map(r => r.date),
-      datasets: [{
-        label: '4×4 max HR',
-        data: f.map(r => r.maxHr),
-        borderColor: '#ef4444',
-        backgroundColor: 'rgba(239, 68, 68, 0.15)',
-        tension: 0.2,
-        pointRadius: 4,
-        pointBackgroundColor: f.map(r => r.dow === 1 ? '#4ade80' : r.dow === 4 ? '#ef4444' : '#888'),
-      }],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      scales: {
-        x: { ticks: { color: '#888', font: { size: 10 }, maxTicksLimit: 8 }, grid: { display: false } },
-        y: { ticks: { color: '#888' }, grid: { color: '#2a2a2a' }, suggestedMin: 160, suggestedMax: 200 },
-      },
-      plugins: { legend: { display: false } },
-    },
-  });
-
-  const z2sessions = withWhoop.filter(r => r.type === 'z2');
-  const drifters = z2sessions.filter(r => {
-    const total = r.z1 + r.z2 + r.z3 + r.z4 + r.z5;
-    if (total === 0) return false;
-    return ((r.z3 + r.z4) / total) > 0.30;
-  });
-  const list = document.getElementById('drift-list');
-  if (drifters.length === 0) {
-    list.innerHTML = `<div class="chart-note">Clean: ${z2sessions.length} Z2 session${z2sessions.length === 1 ? '' : 's'} logged, none exceeded the threshold.</div>`;
-  } else {
-    list.innerHTML = `<table class="analyze-table"><thead><tr>
-      <th>Date</th><th>Min</th><th>Z3+Z4 %</th><th>Max HR</th>
-    </tr></thead><tbody>` +
-      drifters.slice().reverse().map(r => {
-        const total = r.z1 + r.z2 + r.z3 + r.z4 + r.z5;
-        const pct = ((r.z3 + r.z4) / total) * 100;
-        return `<tr><td>${r.date.slice(5)} ${DOW[r.dow]}</td><td>${Math.round(r.mins)}</td><td>${pct.toFixed(0)}%</td><td>${r.maxHr ?? '–'}</td></tr>`;
-      }).join('') +
-      `</tbody></table>`;
-  }
 }
 
 // ============================================================
