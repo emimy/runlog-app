@@ -746,6 +746,10 @@
 </nav>
 
 <main>
+  <div id="update-banner" class="sync-banner ok" style="display:none">
+    <span>A new version is available.</span>
+    <button id="update-banner-btn">Update now</button>
+  </div>
   <!-- LOG VIEW -->
   <section class="view active" id="view-log">
     <div class="field">
@@ -999,6 +1003,14 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <script>
+// ============================================================
+// App version — bumped on every deploy. Used by the self-update
+// mechanism: the running app fetches the live index.html, finds
+// this string, and if it's different from the one baked into the
+// current page, shows a banner prompting the user to reload.
+// ============================================================
+const APP_VERSION = '2026-04-21-1';
+
 // ============================================================
 // IndexedDB setup
 // ============================================================
@@ -3320,6 +3332,57 @@ async function enrichSessionWithWhoop(session) {
 }
 
 // ============================================================
+// Self-update check
+// ============================================================
+// iOS aggressively caches PWAs added to the home screen. Without a service
+// worker revalidating the HTML, new versions don't take effect until the
+// app is reinstalled — a friction point this module is designed to remove.
+//
+// Approach: on load and every 10 minutes, fetch index.html from the origin
+// with cache: 'no-cache' (which bypasses the iOS PWA cache), extract the
+// APP_VERSION string, and if it differs from the one baked into the running
+// page, reveal a banner prompting the user to reload. Reload preserves
+// IndexedDB and all config (Whoop tokens, GitHub config, preferences).
+
+const UPDATE_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+async function checkForUpdate() {
+  try {
+    // Cache-busting query string + no-cache headers. Belt-and-suspenders
+    // because iOS has ignored Cache-Control in some versions.
+    const url = window.location.origin + window.location.pathname + '?_v=' + Date.now();
+    const res = await fetch(url, { cache: 'no-cache' });
+    if (!res.ok) return;
+    const text = await res.text();
+    // Parse out APP_VERSION from the served HTML. The regex matches the
+    // exact declaration we write at the top of the script.
+    const m = text.match(/const APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+    if (!m) return;
+    const remote = m[1];
+    if (remote && remote !== APP_VERSION) {
+      showUpdateBanner(remote);
+    }
+  } catch (err) {
+    // Silent fail — offline, Pages hiccup, whatever. We'll retry next interval.
+  }
+}
+
+function showUpdateBanner(remoteVersion) {
+  const banner = document.getElementById('update-banner');
+  if (!banner) return;
+  const span = banner.querySelector('span');
+  if (span) {
+    span.textContent = `New version available (${remoteVersion}). Your data is safe.`;
+  }
+  banner.style.display = 'block';
+}
+
+document.getElementById('update-banner-btn').addEventListener('click', () => {
+  // Reload from server, bypassing HTTP cache.
+  window.location.reload();
+});
+
+// ============================================================
 // Bootstrap
 // ============================================================
 async function updateCount() {
@@ -3342,6 +3405,15 @@ async function updateCount() {
       navigator.storage.persist().catch(() => {});
     }
     updateCount();
+
+    // Check for app updates now and periodically. Allows the PWA to
+    // detect new deployments without requiring a home-screen reinstall.
+    checkForUpdate();
+    setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
+    // Also check whenever the app comes back to foreground
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkForUpdate();
+    });
 
     // Auto-pull from GitHub on startup if enabled
     if (ghConfig) {
