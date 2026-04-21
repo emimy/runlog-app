@@ -1167,15 +1167,43 @@ async function ghListSessions() {
 }
 
 async function ghFetchSession(file) {
-  // Use authenticated API endpoint (not file.download_url which doesn't auth for private repos)
+  // Two paths for fetching file content from GitHub:
+  //
+  // Path A (small files, ≤1 MB): /contents/:path with Accept raw — returns JSON directly.
+  // Path B (any size): /git/blobs/:sha — returns base64 we decode locally. Required for
+  //   our session files because they embed a ~1 MB screenshot, pushing them over the
+  //   Contents-API inline limit. Without this, Pull silently returned empty content for
+  //   every session with a screenshot.
+  //
+  // We prefer the Blobs path when we have a sha (ghListSessions returns sha on each file).
+
+  if (file.sha) {
+    const blobUrl = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/git/blobs/${file.sha}`;
+    console.log('[ghFetchSession] Blobs API GET', file.name, 'sha', file.sha.slice(0, 8));
+    const blobRes = await fetch(blobUrl, { headers: ghHeaders() });
+    if (!blobRes.ok) {
+      const errText = await blobRes.text();
+      console.error('[ghFetchSession] blob error body:', errText.slice(0, 200));
+      throw new Error(`Fetch blob ${file.name}: ${blobRes.status}`);
+    }
+    const blob = await blobRes.json();
+    if (blob.encoding !== 'base64' || !blob.content) {
+      throw new Error(`Fetch ${file.name}: unexpected blob encoding ${blob.encoding}`);
+    }
+    // Decode base64 (GitHub wraps lines at 60 chars) into the original UTF-8 JSON
+    const bin = atob(blob.content.replace(/\n/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const raw = new TextDecoder().decode(bytes);
+    return JSON.parse(raw);
+  }
+
+  // Fallback: no sha available, use Contents API with raw accept.
+  // Works for files ≤1 MB only. Will return empty/corrupt for larger files.
   const apiUrl = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${file.path}`;
-  console.log('[ghFetchSession] GET', apiUrl);
+  console.log('[ghFetchSession] Contents API GET', apiUrl);
   const res = await fetch(apiUrl, {
-    headers: {
-      ...ghHeaders(),
-      // Request raw content directly instead of base64-wrapped JSON metadata
-      'Accept': 'application/vnd.github.raw+json',
-    },
+    headers: { ...ghHeaders(), 'Accept': 'application/vnd.github.raw+json' },
   });
   console.log('[ghFetchSession]', file.name, 'status:', res.status);
   if (!res.ok) {
