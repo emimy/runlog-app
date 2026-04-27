@@ -996,6 +996,13 @@
     </div>
 
     <div class="field equipment-detail" id="equipment-fields-assault" style="display:none">
+      <div class="row-2" style="margin-bottom:10px">
+        <div>
+          <label for="assault-distance">Distance (km)</label>
+          <input type="text" id="assault-distance" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="5.0" autocomplete="off">
+        </div>
+        <div></div>
+      </div>
       <label for="workout-notes">Workout Notes</label>
       <textarea id="workout-notes" placeholder="e.g. 10 cal × 10 rounds, 1 min rest"></textarea>
     </div>
@@ -1210,6 +1217,21 @@
       <div id="bt-detail" class="kpi-detail" style="display:none"></div>
     </div>
 
+    <div class="analyze-section" id="analyze-totalkm">
+      <div class="cal-header">
+        <button id="km-prev" aria-label="Previous 7 days">‹</button>
+        <div class="cal-title" id="km-label">Total km — last 7 days</div>
+        <button id="km-next" aria-label="Next 7 days">›</button>
+      </div>
+      <div class="kpi-grid" style="grid-template-columns: 1fr">
+        <div class="kpi">
+          <div class="val" id="kpi-totalkm">–</div>
+          <div class="lbl">km run <span class="kpi-delta" id="kpi-totalkm-delta"></span></div>
+        </div>
+      </div>
+      <div class="chart-note" id="totalkm-breakdown" style="margin-top:6px;font-size:11px"></div>
+    </div>
+
     <div class="empty-analyze" id="analyze-empty" style="display:none">
       No sessions yet with Whoop data. Log some runs and come back.
     </div>
@@ -1246,7 +1268,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-12';
+const APP_VERSION = '2026-04-21-13';
 
 // ============================================================
 // IndexedDB setup
@@ -1408,6 +1430,25 @@ const EQUIPMENT_LABELS = {
   'gym_treadmill':      'gym treadmill',
   'gym_assault_runner': 'assault runner',
 };
+
+// Default distances assumed when a session has no explicit distanceKm logged.
+// This applies retroactively to existing sessions where the form didn't capture
+// distance (e.g. older 4×4 / HWPO records).
+//   4×4: ~5 km is the typical Norwegian 4×4 protocol on the assault runner
+//   HWPO: ~4 km is a reasonable midpoint across the variety of HWPO interval sessions
+const DEFAULT_RUN_KM = {
+  '4x4': 5,
+  'hwpo_intervals': 4,
+};
+
+// Returns the distance attributable to a session for the "total km run" widget.
+// Logged distance always wins. Otherwise falls back to type-specific defaults.
+// Sessions with no logged distance and no default (e.g. type=other) return 0.
+function runKmFor(s) {
+  if (s == null) return 0;
+  if (s.distanceKm != null && s.distanceKm > 0) return s.distanceKm;
+  return DEFAULT_RUN_KM[s.type] ?? 0;
+}
 
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
@@ -1929,6 +1970,13 @@ dateInput.value = new Date().toISOString().slice(0, 10);
 
 sessionType.addEventListener('change', () => {
   otherWrap.style.display = sessionType.value === 'other' ? 'block' : 'none';
+  // Auto-fill default distance for 4×4 sessions on the assault runner.
+  // Only fills if the field is empty (don't clobber what the user typed).
+  const assDist = document.getElementById('assault-distance');
+  if (assDist && !assDist.value) {
+    if (sessionType.value === '4x4') assDist.value = '5';
+    else if (sessionType.value === 'hwpo_intervals') assDist.value = '4';
+  }
 });
 
 function showFieldsForEquipment(eq) {
@@ -2018,6 +2066,7 @@ async function loadSessionIntoForm(id) {
   outdoorHours.value = '';
   outdoorMins.value = '';
   outdoorDistance.value = '';
+  document.getElementById('assault-distance').value = '';
   outdoorSpeedHint.classList.remove('show');
   if (eq === 'outdoor') {
     if (s.durationMinutes != null) {
@@ -2030,6 +2079,7 @@ async function loadSessionIntoForm(id) {
     if (s.distanceKm != null) distanceInput.value = s.distanceKm;
     if (s.avgSpeedKmh != null) speedInput.value = s.avgSpeedKmh;
   } else if (eq === 'gym_assault_runner') {
+    if (s.distanceKm != null) document.getElementById('assault-distance').value = s.distanceKm;
     if (s.workoutNotes) notesInput.value = s.workoutNotes;
   }
   // Existing image preview
@@ -2097,6 +2147,8 @@ saveBtn.addEventListener('click', async () => {
       if (d != null) session.distanceKm = d;
       if (sp != null) session.avgSpeedKmh = sp;
     } else if (currentEquipment === 'gym_assault_runner') {
+      const ad = parseNum(document.getElementById('assault-distance').value);
+      if (ad != null && ad > 0) session.distanceKm = ad;
       if (notesInput.value) session.workoutNotes = notesInput.value.trim();
     }
 
@@ -2197,6 +2249,7 @@ function resetForm() {
   outdoorHours.value = '';
   outdoorMins.value = '';
   outdoorDistance.value = '';
+  document.getElementById('assault-distance').value = '';
   outdoorSpeedHint.classList.remove('show');
   outdoorSpeedHint.innerHTML = '';
   currentEquipment = 'outdoor';
@@ -2795,6 +2848,7 @@ function normalize(session) {
     equipment: session.equipment || (session.treadmill ? 'home_treadmill' : 'outdoor'),
     distanceKm: session.distanceKm != null ? Number(session.distanceKm) : null,
     avgSpeedKmh: session.avgSpeedKmh != null ? Number(session.avgSpeedKmh) : null,
+    runKm: runKmFor(session),
     mins: mins || 0,
     z1, z2, z3, z4, z5,
     maxHr, avgHr, strain,
@@ -2885,6 +2939,7 @@ async function renderAnalyze() {
   renderLast7Days(rows);
   renderFourWeekSummary(rows);
   render4x4HrChart(withWhoop);
+  renderTotalKm(rows);
 }
 
 // ============================================================
@@ -3438,6 +3493,72 @@ document.getElementById('wk7-next').addEventListener('click', () => {
   if (next > todayIso()) return;
   wk7Anchor = next;
   renderLast7Days(allRowsCache);
+});
+
+// ============================================================
+// Total km run — windowed 7-day total with comparison vs prev week
+// ============================================================
+// Same window pattern as Last 7 days but independent anchor: user can navigate
+// these widgets separately. Distance per session uses runKmFor() which falls
+// back to type defaults (5 km for 4×4, 4 km for HWPO) when no explicit
+// distance was logged. A small breakdown line shows where the total came
+// from so the math is visible, not a black box.
+
+let kmAnchor = new Date().toISOString().slice(0, 10);
+
+function sumKm(rows, startIso, endIso) {
+  return rows
+    .filter(r => r.date >= startIso && r.date <= endIso)
+    .reduce((s, r) => s + (r.runKm || 0), 0);
+}
+
+function renderTotalKm(rows) {
+  const end = kmAnchor;
+  const start = isoBack(end, 6);
+  const prevEnd = isoBack(end, 7);
+  const prevStart = isoBack(end, 13);
+
+  const cur = sumKm(rows, start, end);
+  const prev = sumKm(rows, prevStart, prevEnd);
+
+  // Label
+  document.getElementById('km-label').textContent =
+    end === todayIso() ? `Total km · last 7 days (${formatRange(start, end)})`
+                       : `Total km · ${formatRange(start, end)}`;
+  document.getElementById('km-next').disabled = (end === todayIso());
+
+  document.getElementById('kpi-totalkm').textContent = cur.toFixed(1);
+
+  const dKm = formatPctDelta(cur, prev);
+  const el = document.getElementById('kpi-totalkm-delta');
+  el.textContent = dKm.text;
+  el.className = 'kpi-delta ' + dKm.cls;
+
+  // Breakdown by type so the user can see where the km came from
+  const inWindow = rows.filter(r => r.date >= start && r.date <= end);
+  const byType = {};
+  for (const r of inWindow) {
+    const km = r.runKm || 0;
+    if (km <= 0) continue;
+    byType[r.type] = (byType[r.type] || 0) + km;
+  }
+  const order = ['4x4', 'hwpo_intervals', 'long_run', 'z2', 'gps_outdoor', 'other'];
+  const parts = order
+    .filter(t => byType[t])
+    .map(t => `${SESSION_LABELS[t]?.label || t}: ${byType[t].toFixed(1)} km`);
+  document.getElementById('totalkm-breakdown').textContent =
+    parts.length ? parts.join(' · ') : '';
+}
+
+document.getElementById('km-prev').addEventListener('click', () => {
+  kmAnchor = isoBack(kmAnchor, 7);
+  renderTotalKm(allRowsCache);
+});
+document.getElementById('km-next').addEventListener('click', () => {
+  const next = isoForward(kmAnchor, 7);
+  if (next > todayIso()) return;
+  kmAnchor = next;
+  renderTotalKm(allRowsCache);
 });
 
 // ============================================================
