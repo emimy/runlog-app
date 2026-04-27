@@ -531,6 +531,56 @@
   .kpi-delta.down { color: #fca5a5; }
   .kpi-delta.flat { color: var(--text-dim); }
 
+  /* Tappable KPI tile */
+  .kpi.tappable {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 120ms ease;
+  }
+  .kpi.tappable:active {
+    background: rgba(74, 222, 128, 0.08);
+  }
+  .kpi.tappable.selected {
+    background: rgba(74, 222, 128, 0.12);
+    outline: 1px solid rgba(74, 222, 128, 0.4);
+  }
+
+  /* KPI detail expansion below the grid */
+  .kpi-detail {
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .kpi-detail-empty {
+    padding: 14px 8px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .kpi-detail-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .kpi-detail-row:active { opacity: 0.7; }
+  .kpi-detail-row .kpi-detail-date { color: var(--text-dim); min-width: 78px; font-size: 12px; }
+  .kpi-detail-row .kpi-detail-type-badge {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  }
+  .kpi-detail-row .kpi-detail-type-badge.type-4x4         { background: rgba(239, 68, 68, 0.18);  color: #fca5a5; }
+  .kpi-detail-row .kpi-detail-type-badge.type-hwpo        { background: rgba(168, 85, 247, 0.18); color: #d8b4fe; }
+  .kpi-detail-row .kpi-detail-type-badge.type-long_run    { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+  .kpi-detail-row .kpi-detail-type-badge.type-z2          { background: rgba(74, 222, 128, 0.18); color: #86efac; }
+  .kpi-detail-row .kpi-detail-type-badge.type-other       { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
+  .kpi-detail-row .kpi-detail-metric { margin-left: auto; color: var(--text); font-weight: 600; }
+
   .chart-wrap {
     position: relative;
     height: 240px;
@@ -1053,19 +1103,20 @@
         <button id="wk7-next" aria-label="Next 7 days">›</button>
       </div>
       <div class="kpi-grid">
-        <div class="kpi">
+        <div class="kpi tappable" id="kpi-tile-4x4" data-kpi="4x4" role="button" tabindex="0">
           <div class="val" id="kpi-4x4">–</div>
           <div class="lbl"># 4×4 <span class="kpi-delta" id="kpi-4x4-delta"></span></div>
         </div>
-        <div class="kpi">
+        <div class="kpi tappable" id="kpi-tile-z45" data-kpi="z45" role="button" tabindex="0">
           <div class="val" id="kpi-z45">–</div>
           <div class="lbl">Z4+Z5 min <span class="kpi-delta" id="kpi-z45-delta"></span></div>
         </div>
-        <div class="kpi">
+        <div class="kpi tappable" id="kpi-tile-z2mins" data-kpi="z2mins" role="button" tabindex="0">
           <div class="val" id="kpi-z2mins">–</div>
           <div class="lbl">Z2 run min <span class="kpi-delta" id="kpi-z2mins-delta"></span></div>
         </div>
       </div>
+      <div id="kpi-detail" class="kpi-detail" style="display:none"></div>
     </div>
 
     <div class="analyze-section">
@@ -1128,7 +1179,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-3';
+const APP_VERSION = '2026-04-21-4';
 
 // ============================================================
 // IndexedDB setup
@@ -2987,6 +3038,9 @@ function formatPctDelta(cur, prev) {
   return { text: `${sign}${rounded}%`, cls: rounded > 0 ? 'up' : 'down' };
 }
 
+// Which KPI tile is currently expanded. null = none.
+let kpiExpanded = null;
+
 function renderLast7Days(rows) {
   allRowsCache = rows;
 
@@ -3022,7 +3076,99 @@ function renderLast7Days(rows) {
   el1.textContent = d4x4.text; el1.className = 'kpi-delta ' + d4x4.cls;
   el2.textContent = dz45.text; el2.className = 'kpi-delta ' + dz45.cls;
   el3.textContent = dz2.text;  el3.className = 'kpi-delta ' + dz2.cls;
+
+  // Refresh expanded detail list (if any) — sessions in the new window
+  if (kpiExpanded) renderKpiDetail(kpiExpanded);
 }
+
+// Build the contextual list of sessions for a given KPI within the current
+// 7-day window. Tap-through opens the session modal.
+function renderKpiDetail(kpi) {
+  const container = document.getElementById('kpi-detail');
+  const end = wk7Anchor;
+  const start = isoBack(end, 6);
+  const inWindow = allRowsCache.filter(r => r.date >= start && r.date <= end);
+
+  let title = '';
+  let rows = [];
+  // For each KPI, decide which sessions match and what metric to display.
+  if (kpi === '4x4') {
+    title = `4×4 sessions (${start} → ${end})`;
+    rows = inWindow
+      .filter(r => r.type === '4x4')
+      .map(r => ({ s: r, metric: `Z5 ${(r.z5 ?? 0).toFixed(1)}m` }));
+  } else if (kpi === 'z45') {
+    title = `Sessions contributing Z4+Z5 minutes`;
+    rows = inWindow
+      .map(r => ({ r, contribution: (r.z4 || 0) + (r.z5 || 0) }))
+      .filter(x => x.contribution > 0)
+      .sort((a, b) => b.contribution - a.contribution)
+      .map(({ r, contribution }) => ({
+        s: r,
+        metric: `${contribution.toFixed(1)}m`,
+      }));
+  } else if (kpi === 'z2mins') {
+    title = `Z2 sessions`;
+    rows = inWindow
+      .filter(r => r.type === 'z2')
+      .map(r => ({ s: r, metric: `${Math.round(r.mins || 0)}m` }));
+  }
+
+  // Sort by date descending so most recent shows first
+  rows.sort((a, b) => b.s.date.localeCompare(a.s.date));
+
+  if (rows.length === 0) {
+    container.innerHTML = `<div class="kpi-detail-empty">No matching sessions in this window.</div>`;
+    container.style.display = 'block';
+    return;
+  }
+
+  const html = rows.map(({ s, metric }) => {
+    const meta = SESSION_LABELS[s.type] || SESSION_LABELS.other;
+    const cssMap = {
+      '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
+      'long_run': 'type-long_run', 'z2': 'type-z2',
+      'gps_outdoor': 'type-z2', 'other': 'type-other',
+    };
+    const css = cssMap[s.type] || 'type-other';
+    return `
+      <div class="kpi-detail-row" data-id="${s.id}">
+        <span class="kpi-detail-date">${s.date}</span>
+        <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
+        <span class="kpi-detail-metric">${metric}</span>
+      </div>
+    `;
+  }).join('');
+  container.innerHTML = html;
+  container.style.display = 'block';
+
+  container.querySelectorAll('.kpi-detail-row').forEach(row => {
+    row.addEventListener('click', () => openModal(row.dataset.id));
+  });
+}
+
+// Wire up click on each KPI tile: toggle expansion. Tapping the same tile
+// twice collapses; tapping a different tile swaps.
+['4x4', 'z45', 'z2mins'].forEach(kpi => {
+  const tile = document.getElementById('kpi-tile-' + kpi);
+  if (!tile) return;
+  tile.addEventListener('click', () => {
+    if (kpiExpanded === kpi) {
+      // Collapse
+      kpiExpanded = null;
+      document.getElementById('kpi-detail').style.display = 'none';
+      tile.classList.remove('selected');
+    } else {
+      // Switch / open
+      ['4x4', 'z45', 'z2mins'].forEach(k => {
+        document.getElementById('kpi-tile-' + k).classList.remove('selected');
+      });
+      kpiExpanded = kpi;
+      tile.classList.add('selected');
+      renderKpiDetail(kpi);
+    }
+  });
+});
 
 document.getElementById('wk7-prev').addEventListener('click', () => {
   wk7Anchor = isoBack(wk7Anchor, 7);
