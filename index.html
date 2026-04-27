@@ -581,6 +581,32 @@
   .kpi-detail-row .kpi-detail-type-badge.type-other       { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
   .kpi-detail-row .kpi-detail-metric { margin-left: auto; color: var(--text); font-weight: 600; }
 
+  /* Equipment sub-filter for By type drilldown (Long, Zone 2) */
+  .bt-equip-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .bt-equip-chip {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    font-family: inherit;
+  }
+  .bt-equip-chip.active {
+    color: #86efac;
+    border-color: rgba(74, 222, 128, 0.4);
+    background: rgba(74, 222, 128, 0.08);
+  }
+
   /* By type — 2x2 grid of tappable tiles */
   .bytype-grid {
     display: grid;
@@ -1176,7 +1202,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-8';
+const APP_VERSION = '2026-04-21-9';
 
 // ============================================================
 // IndexedDB setup
@@ -3211,19 +3237,35 @@ function renderKpiDetail(kpi) {
 // a per-type relevant metric.
 
 let btExpanded = null; // currently expanded type ('4x4', 'hwpo_intervals', etc.) or null
+// Equipment filter state per type. Keyed by type, value is equipment code or 'all'.
+// Resets when the tile collapses, so each fresh expansion starts at 'all'.
+const btEquipFilter = {};
+
+// Types where the equipment selector is shown. 4x4 and HWPO are mostly
+// Assault Runner per training pattern, so an equipment filter would mostly be
+// noise there. Long and Z2 vary across treadmill / outdoor.
+const EQUIP_FILTER_TYPES = new Set(['long_run', 'z2']);
 
 function renderByTypeDetail(type) {
   const container = document.getElementById('bt-detail');
   const allRows = (allRowsCache || []);
-  const rows = allRows
+  const allOfType = allRows
     .filter(r => r.type === type)
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  if (rows.length === 0) {
+  if (allOfType.length === 0) {
     container.innerHTML = `<div class="kpi-detail-empty">No ${type} sessions yet.</div>`;
     container.style.display = 'block';
     return;
   }
+
+  // Determine the active equipment filter for this type
+  const activeEquip = btEquipFilter[type] || 'all';
+
+  // Apply equipment filter (only if type allows it)
+  const filtered = (EQUIP_FILTER_TYPES.has(type) && activeEquip !== 'all')
+    ? allOfType.filter(r => r.equipment === activeEquip)
+    : allOfType;
 
   // Per-type relevant metric:
   //   4x4 / hwpo_intervals → Z4+Z5 minutes (combined "real work" measure)
@@ -3252,20 +3294,58 @@ function renderByTypeDetail(type) {
     'long_run': 'type-long_run', 'z2': 'type-z2',
   };
 
-  const html = rows.map(r => {
-    const meta = SESSION_LABELS[r.type] || SESSION_LABELS.other;
-    const css = cssMap[r.type] || 'type-other';
-    return `
-      <div class="kpi-detail-row" data-id="${r.id}">
-        <span class="kpi-detail-date">${r.date}</span>
-        <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
-        <span class="kpi-detail-metric">${metricFor(r)}</span>
+  // Build equipment selector chips. Only show equipment values that actually
+  // appear in this user's data for this type — keeps the UI honest as data
+  // grows. "All" is always first.
+  let chipsHtml = '';
+  if (EQUIP_FILTER_TYPES.has(type)) {
+    const equipsPresent = Array.from(new Set(allOfType.map(r => r.equipment).filter(Boolean)));
+    // Stable ordering: outdoor first, then treadmills alphabetically by label
+    const equipOrder = ['outdoor', 'home_treadmill', 'gym_treadmill', 'gym_assault_runner'];
+    equipsPresent.sort((a, b) => equipOrder.indexOf(a) - equipOrder.indexOf(b));
+
+    const options = [
+      { value: 'all', label: `All (${allOfType.length})` },
+      ...equipsPresent.map(eq => ({
+        value: eq,
+        label: `${EQUIPMENT_LABELS[eq] || eq} (${allOfType.filter(r => r.equipment === eq).length})`,
+      })),
+    ];
+    chipsHtml = `
+      <div class="bt-equip-filters">
+        ${options.map(opt => `
+          <button class="bt-equip-chip${opt.value === activeEquip ? ' active' : ''}"
+                  data-equip="${opt.value}">${opt.label}</button>
+        `).join('')}
       </div>
     `;
-  }).join('');
-  container.innerHTML = html;
+  }
+
+  const rowsHtml = filtered.length === 0
+    ? `<div class="kpi-detail-empty">No sessions match this filter.</div>`
+    : filtered.map(r => {
+        const meta = SESSION_LABELS[r.type] || SESSION_LABELS.other;
+        const css = cssMap[r.type] || 'type-other';
+        return `
+          <div class="kpi-detail-row" data-id="${r.id}">
+            <span class="kpi-detail-date">${r.date}</span>
+            <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
+            <span class="kpi-detail-metric">${metricFor(r)}</span>
+          </div>
+        `;
+      }).join('');
+
+  container.innerHTML = chipsHtml + rowsHtml;
   container.style.display = 'block';
 
+  // Wire up equipment chip clicks: tap to filter, re-render the list.
+  container.querySelectorAll('.bt-equip-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      btEquipFilter[type] = chip.dataset.equip;
+      renderByTypeDetail(type);
+    });
+  });
+  // Row taps open the modal as before.
   container.querySelectorAll('.kpi-detail-row').forEach(row => {
     row.addEventListener('click', () => openModal(row.dataset.id));
   });
@@ -3278,6 +3358,8 @@ function renderByTypeDetail(type) {
   tile.addEventListener('click', () => {
     if (btExpanded === type) {
       btExpanded = null;
+      // Reset this type's equipment filter so the next expansion starts on All
+      delete btEquipFilter[type];
       document.getElementById('bt-detail').style.display = 'none';
       tile.classList.remove('selected');
     } else {
