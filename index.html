@@ -588,6 +588,12 @@
     text-align: right;
     flex-shrink: 0;
   }
+  /* Color-coded metric pieces in Long & Z2 drilldown rows.
+     Distance → blue (volume); Minutes → neutral text; Speed → green (intensity). */
+  .kpi-detail-row .metric-dist  { color: #93c5fd; }
+  .kpi-detail-row .metric-mins  { color: var(--text); }
+  .kpi-detail-row .metric-speed { color: #86efac; }
+  .kpi-detail-row .metric-sep   { color: var(--text-dim); font-weight: 400; }
 
   /* Equipment sub-filter for By type drilldown (Long, Zone 2) */
   .bt-equip-filters {
@@ -630,6 +636,36 @@
     line-height: 1.2;
   }
   .kpi.tappable.selected .lbl-only { color: #86efac; }
+
+  /* By-type tile label colors — idle state: subtly tinted by type so the
+     four tiles read as a palette at a glance, matching the calendar. */
+  .bt-tile.bt-tile-4x4 .lbl-only            { color: #fca5a5; }
+  .bt-tile.bt-tile-hwpo_intervals .lbl-only { color: #d8b4fe; }
+  .bt-tile.bt-tile-long_run .lbl-only       { color: #fcd34d; }
+  .bt-tile.bt-tile-z2 .lbl-only             { color: #86efac; }
+
+  /* Selected state: switch the surface to the type tint and outline. */
+  .bt-tile.bt-tile-4x4.selected {
+    background: rgba(239, 68, 68, 0.15);
+    outline: 1px solid rgba(239, 68, 68, 0.5);
+  }
+  .bt-tile.bt-tile-hwpo_intervals.selected {
+    background: rgba(168, 85, 247, 0.15);
+    outline: 1px solid rgba(168, 85, 247, 0.5);
+  }
+  .bt-tile.bt-tile-long_run.selected {
+    background: rgba(245, 158, 11, 0.15);
+    outline: 1px solid rgba(245, 158, 11, 0.5);
+  }
+  .bt-tile.bt-tile-z2.selected {
+    background: rgba(74, 222, 128, 0.15);
+    outline: 1px solid rgba(74, 222, 128, 0.5);
+  }
+  /* The generic selected rule above colors .lbl-only green; override per-type. */
+  .bt-tile.bt-tile-4x4.selected .lbl-only            { color: #fca5a5; }
+  .bt-tile.bt-tile-hwpo_intervals.selected .lbl-only { color: #d8b4fe; }
+  .bt-tile.bt-tile-long_run.selected .lbl-only       { color: #fcd34d; }
+  .bt-tile.bt-tile-z2.selected .lbl-only             { color: #86efac; }
 
   /* Subtitle line under each By-type tile (count + average) */
   .bt-sub {
@@ -1154,19 +1190,19 @@
     <div class="analyze-section" id="analyze-bytype">
       <h3>By type</h3>
       <div class="bytype-grid">
-        <div class="kpi tappable" id="bt-tile-4x4" data-bt="4x4" role="button" tabindex="0">
+        <div class="kpi tappable bt-tile bt-tile-4x4" id="bt-tile-4x4" data-bt="4x4" role="button" tabindex="0">
           <div class="lbl-only">4×4</div>
           <div class="bt-sub" id="bt-sub-4x4">–</div>
         </div>
-        <div class="kpi tappable" id="bt-tile-hwpo_intervals" data-bt="hwpo_intervals" role="button" tabindex="0">
+        <div class="kpi tappable bt-tile bt-tile-hwpo_intervals" id="bt-tile-hwpo_intervals" data-bt="hwpo_intervals" role="button" tabindex="0">
           <div class="lbl-only">HWPO</div>
           <div class="bt-sub" id="bt-sub-hwpo_intervals">–</div>
         </div>
-        <div class="kpi tappable" id="bt-tile-long_run" data-bt="long_run" role="button" tabindex="0">
+        <div class="kpi tappable bt-tile bt-tile-long_run" id="bt-tile-long_run" data-bt="long_run" role="button" tabindex="0">
           <div class="lbl-only">Long</div>
           <div class="bt-sub" id="bt-sub-long_run">–</div>
         </div>
-        <div class="kpi tappable" id="bt-tile-z2" data-bt="z2" role="button" tabindex="0">
+        <div class="kpi tappable bt-tile bt-tile-z2" id="bt-tile-z2" data-bt="z2" role="button" tabindex="0">
           <div class="lbl-only">Zone 2</div>
           <div class="bt-sub" id="bt-sub-z2">–</div>
         </div>
@@ -1210,7 +1246,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-11';
+const APP_VERSION = '2026-04-21-12';
 
 // ============================================================
 // IndexedDB setup
@@ -3289,7 +3325,9 @@ function renderByTypeDetail(type) {
       return `Z4+Z5 ${(z4 + z5).toFixed(1)}m`;
     }
     if (type === 'long_run' || type === 'z2') {
-      // Build "X km · Ym · Z km/h", computing missing pieces where possible
+      // Build "X km · Ym · Z km/h", computing missing pieces where possible.
+      // Each piece is wrapped in a span so it can be color-coded:
+      //   distance → blue (volume), minutes → neutral, speed → green (intensity).
       const parts = [];
       const dist = r.distanceKm;
       let mins = r.mins;
@@ -3298,10 +3336,10 @@ function renderByTypeDetail(type) {
       if (mins == null && dist != null && speed != null && speed > 0) {
         mins = (dist / speed) * 60;
       }
-      if (dist != null) parts.push(`${dist} km`);
-      if (mins != null) parts.push(`${Math.round(mins)}m`);
-      if (speed != null) parts.push(`${speed} km/h`);
-      return parts.length ? parts.join(' · ') : '–';
+      if (dist != null) parts.push(`<span class="metric-dist">${dist} km</span>`);
+      if (mins != null) parts.push(`<span class="metric-mins">${Math.round(mins)}m</span>`);
+      if (speed != null) parts.push(`<span class="metric-speed">${speed} km/h</span>`);
+      return parts.length ? parts.join('<span class="metric-sep"> · </span>') : '–';
     }
     return '–';
   }
