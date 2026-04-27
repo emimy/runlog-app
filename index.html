@@ -1214,7 +1214,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-5';
+const APP_VERSION = '2026-04-21-6';
 
 // ============================================================
 // IndexedDB setup
@@ -3231,12 +3231,15 @@ function renderByTypeDetail(type) {
   }
 
   // Per-type relevant metric:
-  //   4x4 / hwpo_intervals → Z5 minutes
+  //   4x4 / hwpo_intervals → Z4+Z5 minutes (combined "real work" measure)
   //   long_run            → distance (or duration if no distance)
   //   z2                  → duration
   function metricFor(r) {
     if (type === '4x4' || type === 'hwpo_intervals') {
-      return r.z5 != null ? `Z5 ${r.z5.toFixed(1)}m` : '–';
+      const z4 = r.z4 ?? 0;
+      const z5 = r.z5 ?? 0;
+      if (r.z4 == null && r.z5 == null) return '–';
+      return `Z4+Z5 ${(z4 + z5).toFixed(1)}m`;
     }
     if (type === 'long_run') {
       if (r.distanceKm != null) return `${r.distanceKm} km`;
