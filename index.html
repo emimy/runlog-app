@@ -754,16 +754,6 @@
     height: 4px;
     border-radius: 50%;
   }
-  .cal-day .cal-mismatch {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #fbbf24;
-    box-shadow: 0 0 0 2px var(--surface);
-  }
 
   /* VO2 list */
   .vo2-row {
@@ -787,38 +777,6 @@
     padding: 4px 8px;
     cursor: pointer;
     font-family: inherit;
-  }
-
-  /* Mismatch list */
-  .mismatch-row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 10px 12px;
-    background: rgba(251, 191, 36, 0.08);
-    border: 1px solid rgba(251, 191, 36, 0.2);
-    border-radius: 6px;
-    margin-bottom: 6px;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .mismatch-row:active { opacity: 0.7; }
-  .mismatch-row .mismatch-head {
-    display: flex; justify-content: space-between; align-items: center;
-  }
-  .mismatch-row .mismatch-label { color: #fcd34d; font-weight: 600; }
-  .mismatch-row .mismatch-date { color: var(--text-dim); font-size: 12px; }
-  .mismatch-row .mismatch-reason { color: var(--text); }
-
-  /* Modal mismatch banner */
-  .modal-mismatch {
-    background: rgba(251, 191, 36, 0.1);
-    border: 1px solid rgba(251, 191, 36, 0.3);
-    color: #fcd34d;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 13px;
-    margin-bottom: 12px;
   }
 
   /* Filter chips */
@@ -892,8 +850,8 @@
 
 <nav class="tabs">
   <button class="tab active" data-view="log">Log</button>
-  <button class="tab" data-view="list">History</button>
   <button class="tab" data-view="analyze">Analyze</button>
+  <button class="tab" data-view="list">History</button>
   <button class="tab" data-view="settings">Sync</button>
 </nav>
 
@@ -1182,14 +1140,6 @@
       <div id="bt-detail" class="kpi-detail" style="display:none"></div>
     </div>
 
-    <div class="analyze-section" id="analyze-mismatches" style="display:none">
-      <h3>Mismatches</h3>
-      <div class="chart-note" style="margin-bottom:10px">
-        Sessions where the labeled type didn't match the actual zone profile. Tap to open.
-      </div>
-      <div id="mismatch-list"></div>
-    </div>
-
     <div class="empty-analyze" id="analyze-empty" style="display:none">
       No sessions yet with Whoop data. Log some runs and come back.
     </div>
@@ -1204,7 +1154,6 @@
       <button class="modal-close-x" id="modal-close-x" aria-label="Close">×</button>
     </div>
     <img id="modal-img" style="display:none">
-    <div id="modal-mismatch" class="modal-mismatch" style="display:none"></div>
     <dl class="kv" id="modal-kv"></dl>
     <div class="buttons">
       <button class="primary" id="modal-edit">Edit</button>
@@ -1227,7 +1176,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-7';
+const APP_VERSION = '2026-04-21-8';
 
 // ============================================================
 // IndexedDB setup
@@ -2304,16 +2253,6 @@ async function openModal(id) {
     modalImg.style.display = 'none';
   }
 
-  // Mismatch banner: shown only when labeled type disagrees with zone profile.
-  const mismatch = computeMismatch(s);
-  const mmBanner = document.getElementById('modal-mismatch');
-  if (mismatch) {
-    mmBanner.textContent = `⚠ ${mismatch}`;
-    mmBanner.style.display = 'block';
-  } else {
-    mmBanner.style.display = 'none';
-  }
-
   const rows = [
     ['Date', s.date],
     ['Type', meta.label],
@@ -2876,7 +2815,6 @@ async function renderAnalyze() {
   renderLast7Days(rows);
   renderFourWeekSummary(rows);
   render4x4HrChart(withWhoop);
-  renderMismatches(withWhoop);
 }
 
 // ============================================================
@@ -2994,16 +2932,6 @@ function renderCalendar(allSessions) {
           dots.appendChild(d);
         }
         div.appendChild(dots);
-      }
-
-      // Mismatch indicator: yellow dot in top-right if any session on this day
-      // has a computed mismatch between labeled type and actual zone profile.
-      const hasMismatch = sessions.some(s => computeMismatch(s) !== null);
-      if (hasMismatch) {
-        const m = document.createElement('span');
-        m.className = 'cal-mismatch';
-        m.title = 'Session type may not match zones';
-        div.appendChild(m);
       }
     }
 
@@ -4125,99 +4053,6 @@ function renderVo2Chart(entries) {
   });
 }
 
-// ============================================================
-// Mismatch detection — labeled session type vs actual zone profile
-// ============================================================
-// Returns a human-readable reason string if the session's Whoop data
-// disagrees with its labeled type, else null.
-//
-// Rules (derived from user's training patterns):
-//   4x4:            expect ≥5 min Z5.  Flag if <2.
-//   hwpo_intervals: expect ≥3 min Z5 OR ≥8 min Z4+Z5. Flag if below both.
-//   z2:             expect <30% time in Z3+Z4. Flag if >30%.
-//   long_run:       flag if Z4+Z5 >25% of total time (became threshold).
-//
-// Sessions without Whoop data or with unknown types are never flagged.
-function computeMismatch(s) {
-  if (!s || !s._whoopData) return null;
-  const w = s._whoopData;
-  const z1 = w.z1_min || 0, z2 = w.z2_min || 0, z3 = w.z3_min || 0;
-  const z4 = w.z4_min || 0, z5 = w.z5_min || 0;
-  const total = z1 + z2 + z3 + z4 + z5;
-  if (total < 5) return null; // too short to assess
-
-  switch (s.type) {
-    case '4x4':
-      if (z5 < 2) return `Labeled 4×4 but only ${z5.toFixed(1)} min Z5 (expected ≥5).`;
-      return null;
-
-    case 'hwpo_intervals':
-      if (z5 < 3 && (z4 + z5) < 8) {
-        return `Labeled HWPO intervals but only ${z5.toFixed(1)} min Z5 / ${(z4 + z5).toFixed(1)} min Z4+Z5 (expected ≥3 Z5 or ≥8 Z4+Z5).`;
-      }
-      return null;
-
-    case 'z2': {
-      const hardPct = ((z3 + z4) / total) * 100;
-      if (hardPct > 30) {
-        return `Labeled Z2 but ${hardPct.toFixed(0)}% time in Z3+Z4 (expected <30% — drifted into threshold).`;
-      }
-      return null;
-    }
-
-    case 'long_run': {
-      const topPct = ((z4 + z5) / total) * 100;
-      if (topPct > 25) {
-        return `Labeled Long but ${topPct.toFixed(0)}% time in Z4+Z5 (expected <25% — became threshold session).`;
-      }
-      return null;
-    }
-
-    default:
-      return null;
-  }
-}
-
-function renderMismatches(rowsWithWhoop) {
-  const section = document.getElementById('analyze-mismatches');
-  const list = document.getElementById('mismatch-list');
-  if (!section || !list) return;
-
-  // Build list from enriched session objects — but computeMismatch expects
-  // raw sessions with _whoopData. rowsWithWhoop is from normalize() so we
-  // need to re-fetch the source sessions. Simpler: stash raw on the row.
-  // Actually normalize() drops _whoopData. Do the work with raw fetch.
-  // (We'll take the async hit — cheap enough for the session count.)
-
-  (async () => {
-    const raw = await getAllSessions();
-    const flagged = raw
-      .map(s => ({ s, reason: computeMismatch(s) }))
-      .filter(x => x.reason !== null)
-      .sort((a, b) => b.s.date.localeCompare(a.s.date));
-
-    if (flagged.length === 0) {
-      section.style.display = 'none';
-      return;
-    }
-    section.style.display = 'block';
-    list.innerHTML = flagged.map(({ s, reason }) => {
-      const meta = SESSION_LABELS[s.type] || SESSION_LABELS.other;
-      return `
-        <div class="mismatch-row" data-id="${s.id}">
-          <div class="mismatch-head">
-            <span class="mismatch-label">${meta.label}</span>
-            <span class="mismatch-date">${s.date}</span>
-          </div>
-          <div class="mismatch-reason">${reason}</div>
-        </div>
-      `;
-    }).join('');
-    list.querySelectorAll('.mismatch-row').forEach(row => {
-      row.addEventListener('click', () => openModal(row.dataset.id));
-    });
-  })();
-}
 
 // ============================================================
 // Self-update check
