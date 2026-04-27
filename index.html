@@ -1218,18 +1218,10 @@
     </div>
 
     <div class="analyze-section" id="analyze-totalkm">
-      <div class="cal-header">
-        <button id="km-prev" aria-label="Previous 7 days">‹</button>
-        <div class="cal-title" id="km-label">Total km — last 7 days</div>
-        <button id="km-next" aria-label="Next 7 days">›</button>
-      </div>
-      <div class="kpi-grid" style="grid-template-columns: 1fr">
-        <div class="kpi">
-          <div class="val" id="kpi-totalkm">–</div>
-          <div class="lbl">km run <span class="kpi-delta" id="kpi-totalkm-delta"></span></div>
-        </div>
-      </div>
-      <div class="chart-note" id="totalkm-breakdown" style="margin-top:6px;font-size:11px"></div>
+      <h3>Weekly km</h3>
+      <div class="chart-note" id="totalkm-headline" style="margin-bottom:8px"></div>
+      <div class="chart-wrap"><canvas id="chart-weekly-km"></canvas></div>
+      <div id="totalkm-breakdown" class="kpi-detail" style="display:none;margin-top:10px"></div>
     </div>
 
     <div class="empty-analyze" id="analyze-empty" style="display:none">
@@ -1268,7 +1260,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-13';
+const APP_VERSION = '2026-04-21-14';
 
 // ============================================================
 // IndexedDB setup
@@ -3496,70 +3488,159 @@ document.getElementById('wk7-next').addEventListener('click', () => {
 });
 
 // ============================================================
-// Total km run — windowed 7-day total with comparison vs prev week
+// Weekly km — lifetime line chart, rolling 7-day buckets
 // ============================================================
-// Same window pattern as Last 7 days but independent anchor: user can navigate
-// these widgets separately. Distance per session uses runKmFor() which falls
-// back to type defaults (5 km for 4×4, 4 km for HWPO) when no explicit
-// distance was logged. A small breakdown line shows where the total came
-// from so the math is visible, not a black box.
-
-let kmAnchor = new Date().toISOString().slice(0, 10);
-
-function sumKm(rows, startIso, endIso) {
-  return rows
-    .filter(r => r.date >= startIso && r.date <= endIso)
-    .reduce((s, r) => s + (r.runKm || 0), 0);
-}
+// Buckets are rolling 7-day windows ending today, walking backwards 7 days at
+// a time until before the earliest session. Each point is the total km of
+// sessions in that bucket, computed via runKmFor() (logged distance, falling
+// back to type defaults of 5 km for 4×4 and 4 km for HWPO).
+// Tap a point → breakdown panel below shows that week's date range and the
+// individual sessions that contributed.
 
 function renderTotalKm(rows) {
-  const end = kmAnchor;
-  const start = isoBack(end, 6);
-  const prevEnd = isoBack(end, 7);
-  const prevStart = isoBack(end, 13);
+  const ctx = document.getElementById('chart-weekly-km').getContext('2d');
+  const headline = document.getElementById('totalkm-headline');
+  const breakdown = document.getElementById('totalkm-breakdown');
 
-  const cur = sumKm(rows, start, end);
-  const prev = sumKm(rows, prevStart, prevEnd);
-
-  // Label
-  document.getElementById('km-label').textContent =
-    end === todayIso() ? `Total km · last 7 days (${formatRange(start, end)})`
-                       : `Total km · ${formatRange(start, end)}`;
-  document.getElementById('km-next').disabled = (end === todayIso());
-
-  document.getElementById('kpi-totalkm').textContent = cur.toFixed(1);
-
-  const dKm = formatPctDelta(cur, prev);
-  const el = document.getElementById('kpi-totalkm-delta');
-  el.textContent = dKm.text;
-  el.className = 'kpi-delta ' + dKm.cls;
-
-  // Breakdown by type so the user can see where the km came from
-  const inWindow = rows.filter(r => r.date >= start && r.date <= end);
-  const byType = {};
-  for (const r of inWindow) {
-    const km = r.runKm || 0;
-    if (km <= 0) continue;
-    byType[r.type] = (byType[r.type] || 0) + km;
+  if (rows.length === 0) {
+    headline.textContent = 'No sessions yet.';
+    breakdown.style.display = 'none';
+    analyzeCharts.weeklyKm = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [{ data: [] }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
+    });
+    return;
   }
-  const order = ['4x4', 'hwpo_intervals', 'long_run', 'z2', 'gps_outdoor', 'other'];
-  const parts = order
-    .filter(t => byType[t])
-    .map(t => `${SESSION_LABELS[t]?.label || t}: ${byType[t].toFixed(1)} km`);
-  document.getElementById('totalkm-breakdown').textContent =
-    parts.length ? parts.join(' · ') : '';
+
+  // Build buckets: [{ endIso, startIso, km, sessions: [r,...] }, ...] oldest first
+  const earliest = rows[0].date;
+  const buckets = [];
+  let endIso = todayIso();
+  while (endIso >= earliest) {
+    const startIso = isoBack(endIso, 6);
+    const inBucket = rows.filter(r => r.date >= startIso && r.date <= endIso);
+    const km = inBucket.reduce((s, r) => s + (r.runKm || 0), 0);
+    buckets.unshift({
+      endIso, startIso,
+      km: Math.round(km * 10) / 10,
+      sessions: inBucket,
+    });
+    endIso = isoBack(endIso, 7);
+    // Don't go too far past the earliest: stop when bucket ends before earliest
+    if (endIso < earliest && buckets[0].sessions.length > 0) {
+      // last walk: ensure we capture the bucket containing the earliest session
+      const finalStart = isoBack(endIso, 6);
+      if (finalStart >= earliest) {
+        const inFinal = rows.filter(r => r.date >= finalStart && r.date <= endIso);
+        if (inFinal.length > 0) {
+          buckets.unshift({
+            endIso, startIso: finalStart,
+            km: Math.round(inFinal.reduce((s, r) => s + (r.runKm || 0), 0) * 10) / 10,
+            sessions: inFinal,
+          });
+        }
+      }
+      break;
+    }
+  }
+
+  // Headline: latest week + average across all populated weeks
+  const latest = buckets[buckets.length - 1];
+  const populated = buckets.filter(b => b.km > 0);
+  const avg = populated.length
+    ? populated.reduce((s, b) => s + b.km, 0) / populated.length
+    : 0;
+  headline.innerHTML =
+    `Latest week: <strong>${latest.km.toFixed(1)} km</strong> · ` +
+    `Avg/week: <strong>${avg.toFixed(1)} km</strong>`;
+
+  breakdown.style.display = 'none';
+
+  analyzeCharts.weeklyKm = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: buckets.map(b => formatRange(b.startIso, b.endIso)),
+      datasets: [{
+        label: 'km',
+        data: buckets.map(b => b.km),
+        borderColor: '#86efac',
+        backgroundColor: 'rgba(74, 222, 128, 0.15)',
+        tension: 0.25,
+        pointRadius: 4,
+        pointHoverRadius: 7,
+        fill: false,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: (evt, els) => {
+        if (!els.length) return;
+        const idx = els[0].index;
+        showWeekKmBreakdown(buckets[idx]);
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (item) => `${item.parsed.y.toFixed(1)} km`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#94a3b8', maxTicksLimit: 8 },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          title: { display: true, text: 'km', color: '#94a3b8' },
+          ticks: { color: '#94a3b8' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
 }
 
-document.getElementById('km-prev').addEventListener('click', () => {
-  kmAnchor = isoBack(kmAnchor, 7);
-  renderTotalKm(allRowsCache);
-});
-document.getElementById('km-next').addEventListener('click', () => {
-  const next = isoForward(kmAnchor, 7);
-  if (next > todayIso()) return;
-  kmAnchor = next;
-  renderTotalKm(allRowsCache);
-});
+function showWeekKmBreakdown(bucket) {
+  const container = document.getElementById('totalkm-breakdown');
+  if (!bucket.sessions.length) {
+    container.innerHTML = `<div class="kpi-detail-empty">No sessions ${formatRange(bucket.startIso, bucket.endIso)}.</div>`;
+    container.style.display = 'block';
+    return;
+  }
+  const cssMap = {
+    '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
+    'long_run': 'type-long_run', 'z2': 'type-z2',
+    'gps_outdoor': 'type-z2', 'other': 'type-other',
+  };
+  const sorted = [...bucket.sessions].sort((a, b) => b.date.localeCompare(a.date));
+  const headerHtml = `
+    <div class="chart-note" style="margin-bottom:6px">
+      Week of ${formatRange(bucket.startIso, bucket.endIso)} · ${bucket.km.toFixed(1)} km total
+    </div>
+  `;
+  const rowsHtml = sorted.map(s => {
+    const meta = SESSION_LABELS[s.type] || SESSION_LABELS.other;
+    const css = cssMap[s.type] || 'type-other';
+    const km = (s.runKm || 0).toFixed(1);
+    return `
+      <div class="kpi-detail-row" data-id="${s.id}">
+        <span class="kpi-detail-date">${s.date}</span>
+        <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
+        <span class="kpi-detail-metric">${km} km</span>
+      </div>
+    `;
+  }).join('');
+  container.innerHTML = headerHtml + rowsHtml;
+  container.style.display = 'block';
+  container.querySelectorAll('.kpi-detail-row').forEach(row => {
+    row.addEventListener('click', () => openModal(row.dataset.id));
+  });
+}
+
 
 // ============================================================
 // 4-week summary — windowed, combined Z2 & Z4+Z5 per week
