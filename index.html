@@ -581,6 +581,22 @@
   .kpi-detail-row .kpi-detail-type-badge.type-other       { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
   .kpi-detail-row .kpi-detail-metric { margin-left: auto; color: var(--text); font-weight: 600; }
 
+  /* By type — 2x2 grid of tappable tiles */
+  .bytype-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .kpi .lbl-only {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+    padding: 8px 0;
+    line-height: 1.2;
+  }
+  .kpi.tappable.selected .lbl-only { color: #86efac; }
+
   .chart-wrap {
     position: relative;
     height: 240px;
@@ -1134,6 +1150,25 @@
       <div class="chart-wrap"><canvas id="chart-4x4-maxhr"></canvas></div>
     </div>
 
+    <div class="analyze-section" id="analyze-bytype">
+      <h3>By type</h3>
+      <div class="bytype-grid">
+        <div class="kpi tappable" id="bt-tile-4x4" data-bt="4x4" role="button" tabindex="0">
+          <div class="lbl-only">4×4</div>
+        </div>
+        <div class="kpi tappable" id="bt-tile-hwpo_intervals" data-bt="hwpo_intervals" role="button" tabindex="0">
+          <div class="lbl-only">HWPO</div>
+        </div>
+        <div class="kpi tappable" id="bt-tile-long_run" data-bt="long_run" role="button" tabindex="0">
+          <div class="lbl-only">Long</div>
+        </div>
+        <div class="kpi tappable" id="bt-tile-z2" data-bt="z2" role="button" tabindex="0">
+          <div class="lbl-only">Zone 2</div>
+        </div>
+      </div>
+      <div id="bt-detail" class="kpi-detail" style="display:none"></div>
+    </div>
+
     <div class="analyze-section" id="analyze-mismatches" style="display:none">
       <h3>Mismatches</h3>
       <div class="chart-note" style="margin-bottom:10px">
@@ -1179,7 +1214,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-4';
+const APP_VERSION = '2026-04-21-5';
 
 // ============================================================
 // IndexedDB setup
@@ -3079,6 +3114,8 @@ function renderLast7Days(rows) {
 
   // Refresh expanded detail list (if any) — sessions in the new window
   if (kpiExpanded) renderKpiDetail(kpiExpanded);
+  // Refresh by-type expansion if any (lifetime data, but allRowsCache changed)
+  if (btExpanded) renderByTypeDetail(btExpanded);
 }
 
 // Build the contextual list of sessions for a given KPI within the current
@@ -3166,6 +3203,92 @@ function renderKpiDetail(kpi) {
       kpiExpanded = kpi;
       tile.classList.add('selected');
       renderKpiDetail(kpi);
+    }
+  });
+});
+
+// ============================================================
+// By type — lifetime drilldown into all sessions of one type
+// ============================================================
+// Same drill-down pattern as Last 7 days, but unfiltered by date and grouped
+// by session type. Tile labels: 4×4, HWPO, Long, Zone 2. Tapping a tile
+// expands a list of every session of that type, sorted newest first, with
+// a per-type relevant metric.
+
+let btExpanded = null; // currently expanded type ('4x4', 'hwpo_intervals', etc.) or null
+
+function renderByTypeDetail(type) {
+  const container = document.getElementById('bt-detail');
+  const allRows = (allRowsCache || []);
+  const rows = allRows
+    .filter(r => r.type === type)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  if (rows.length === 0) {
+    container.innerHTML = `<div class="kpi-detail-empty">No ${type} sessions yet.</div>`;
+    container.style.display = 'block';
+    return;
+  }
+
+  // Per-type relevant metric:
+  //   4x4 / hwpo_intervals → Z5 minutes
+  //   long_run            → distance (or duration if no distance)
+  //   z2                  → duration
+  function metricFor(r) {
+    if (type === '4x4' || type === 'hwpo_intervals') {
+      return r.z5 != null ? `Z5 ${r.z5.toFixed(1)}m` : '–';
+    }
+    if (type === 'long_run') {
+      if (r.distanceKm != null) return `${r.distanceKm} km`;
+      if (r.mins != null) return `${Math.round(r.mins)}m`;
+      return '–';
+    }
+    if (type === 'z2') {
+      return r.mins != null ? `${Math.round(r.mins)}m` : '–';
+    }
+    return '–';
+  }
+
+  const cssMap = {
+    '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
+    'long_run': 'type-long_run', 'z2': 'type-z2',
+  };
+
+  const html = rows.map(r => {
+    const meta = SESSION_LABELS[r.type] || SESSION_LABELS.other;
+    const css = cssMap[r.type] || 'type-other';
+    return `
+      <div class="kpi-detail-row" data-id="${r.id}">
+        <span class="kpi-detail-date">${r.date}</span>
+        <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
+        <span class="kpi-detail-metric">${metricFor(r)}</span>
+      </div>
+    `;
+  }).join('');
+  container.innerHTML = html;
+  container.style.display = 'block';
+
+  container.querySelectorAll('.kpi-detail-row').forEach(row => {
+    row.addEventListener('click', () => openModal(row.dataset.id));
+  });
+}
+
+// Wire up click handlers on the four By-type tiles.
+['4x4', 'hwpo_intervals', 'long_run', 'z2'].forEach(type => {
+  const tile = document.getElementById('bt-tile-' + type);
+  if (!tile) return;
+  tile.addEventListener('click', () => {
+    if (btExpanded === type) {
+      btExpanded = null;
+      document.getElementById('bt-detail').style.display = 'none';
+      tile.classList.remove('selected');
+    } else {
+      ['4x4', 'hwpo_intervals', 'long_run', 'z2'].forEach(t => {
+        document.getElementById('bt-tile-' + t).classList.remove('selected');
+      });
+      btExpanded = type;
+      tile.classList.add('selected');
+      renderByTypeDetail(type);
     }
   });
 });
