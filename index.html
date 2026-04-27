@@ -568,6 +568,7 @@
     font-size: 13px;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    flex-wrap: wrap;
   }
   .kpi-detail-row:active { opacity: 0.7; }
   .kpi-detail-row .kpi-detail-date { color: var(--text-dim); min-width: 78px; font-size: 12px; }
@@ -579,7 +580,13 @@
   .kpi-detail-row .kpi-detail-type-badge.type-long_run    { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
   .kpi-detail-row .kpi-detail-type-badge.type-z2          { background: rgba(74, 222, 128, 0.18); color: #86efac; }
   .kpi-detail-row .kpi-detail-type-badge.type-other       { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
-  .kpi-detail-row .kpi-detail-metric { margin-left: auto; color: var(--text); font-weight: 600; }
+  .kpi-detail-row .kpi-detail-metric {
+    margin-left: auto;
+    color: var(--text);
+    font-weight: 600;
+    text-align: right;
+    flex-shrink: 0;
+  }
 
   /* Equipment sub-filter for By type drilldown (Long, Zone 2) */
   .bt-equip-filters {
@@ -1202,7 +1209,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-9';
+const APP_VERSION = '2026-04-21-10';
 
 // ============================================================
 // IndexedDB setup
@@ -3269,8 +3276,10 @@ function renderByTypeDetail(type) {
 
   // Per-type relevant metric:
   //   4x4 / hwpo_intervals → Z4+Z5 minutes (combined "real work" measure)
-  //   long_run            → distance (or duration if no distance)
-  //   z2                  → duration
+  //   long_run            → distance + duration + avg speed (richer context
+  //                         needed because outdoor vs treadmill comparisons
+  //                         depend on all three)
+  //   z2                  → same triple as long_run for the same reason
   function metricFor(r) {
     if (type === '4x4' || type === 'hwpo_intervals') {
       const z4 = r.z4 ?? 0;
@@ -3278,13 +3287,20 @@ function renderByTypeDetail(type) {
       if (r.z4 == null && r.z5 == null) return '–';
       return `Z4+Z5 ${(z4 + z5).toFixed(1)}m`;
     }
-    if (type === 'long_run') {
-      if (r.distanceKm != null) return `${r.distanceKm} km`;
-      if (r.mins != null) return `${Math.round(r.mins)}m`;
-      return '–';
-    }
-    if (type === 'z2') {
-      return r.mins != null ? `${Math.round(r.mins)}m` : '–';
+    if (type === 'long_run' || type === 'z2') {
+      // Build "X km · Ym · Z km/h", computing missing pieces where possible
+      const parts = [];
+      const dist = r.distanceKm;
+      let mins = r.mins;
+      const speed = r.avgSpeedKmh;
+      // Derive mins from distance/speed if not explicitly stored
+      if (mins == null && dist != null && speed != null && speed > 0) {
+        mins = (dist / speed) * 60;
+      }
+      if (dist != null) parts.push(`${dist} km`);
+      if (mins != null) parts.push(`${Math.round(mins)}m`);
+      if (speed != null) parts.push(`${speed} km/h`);
+      return parts.length ? parts.join(' · ') : '–';
     }
     return '–';
   }
