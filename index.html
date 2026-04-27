@@ -1132,6 +1132,11 @@
   <section class="view" id="view-analyze">
     <div class="analyze-section" id="analyze-vo2">
       <h3>VO2 Max Trajectory</h3>
+      <div class="cal-header">
+        <button id="vo2-prev" aria-label="Previous 60 days">‹</button>
+        <div class="cal-title" id="vo2-window-label">Last 60 days</div>
+        <button id="vo2-next" aria-label="Next 60 days">›</button>
+      </div>
       <div class="chart-note" id="vo2-headline" style="margin-bottom:8px"></div>
       <div class="chart-wrap"><canvas id="chart-vo2"></canvas></div>
       <div class="chart-note" id="vo2-pace"></div>
@@ -1260,7 +1265,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-16';
+const APP_VERSION = '2026-04-21-17';
 
 // ============================================================
 // IndexedDB setup
@@ -4377,14 +4382,26 @@ function initVo2DatePicker() {
 }
 
 // Chart rendering
+// VO2 chart window state. Anchor = end date (inclusive) of current 60-day window.
+// Defaults to today; nav buttons shift it back/forward by 60 days.
+// Chart shows actual readings within [anchor-59, anchor]. Goal trajectory line
+// is drawn only when the window's end is at "today" (i.e. user hasn't scrolled
+// back into history) — historical windows hide the goal line per design.
+const VO2_WINDOW_DAYS = 60;
+let vo2Anchor = new Date().toISOString().slice(0, 10);
+let vo2EntriesCache = [];
+
 function renderVo2Chart(entries) {
+  vo2EntriesCache = entries;
   const ctx = document.getElementById('chart-vo2').getContext('2d');
   const headline = document.getElementById('vo2-headline');
   const pace = document.getElementById('vo2-pace');
+  const windowLabel = document.getElementById('vo2-window-label');
 
   if (entries.length === 0) {
     headline.textContent = 'No VO2 max readings yet. Add some in the Sync tab.';
     pace.textContent = '';
+    if (windowLabel) windowLabel.textContent = 'No data';
     analyzeCharts.vo2 = new Chart(ctx, {
       type: 'line',
       data: { labels: [], datasets: [{ data: [] }] },
@@ -4393,64 +4410,110 @@ function renderVo2Chart(entries) {
     return;
   }
 
-  // Current value + delta from first reading
-  const first = entries[0];
-  const latest = entries[entries.length - 1];
-  const delta = latest.value - first.value;
-  headline.innerHTML = `Current: <strong>${latest.value}</strong> (${latest.date}) · ` +
-    `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} since ${first.date}`;
+  // Compute window
+  const endIso = vo2Anchor;
+  const startIso = isoBack(endIso, VO2_WINDOW_DAYS - 1);
+  const inWindow = entries.filter(e => e.date >= startIso && e.date <= endIso);
+  const isLatestWindow = (endIso === todayIso());
 
-  // Pace calculation: vs next goal, linearly
-  const now = new Date(latest.date + 'T00:00:00Z');
-  const nextGoal = VO2_GOALS.find(g => new Date(g.date + 'T00:00:00Z') > now);
-  if (nextGoal) {
-    const daysToGoal = (new Date(nextGoal.date + 'T00:00:00Z') - now) / 86400000;
-    const needed = nextGoal.value - latest.value;
-    const rateNeeded = needed / (daysToGoal / 30); // per month
-    let verdict;
-    if (needed <= 0) verdict = 'already at or above this goal ✓';
-    else if (rateNeeded < 0.5) verdict = 'on pace';
-    else if (rateNeeded < 1.0) verdict = 'tight but achievable';
-    else verdict = 'behind schedule';
-    pace.textContent = `Next goal: ${nextGoal.label}. Need +${needed.toFixed(1)} in ${Math.round(daysToGoal)} days (${rateNeeded.toFixed(2)}/month) — ${verdict}.`;
+  // Window label (e.g. "23 Feb – 21 Apr 2026")
+  const fmt = (iso) => {
+    const d = new Date(iso + 'T00:00:00Z');
+    return `${d.getUTCDate()}/${d.getUTCMonth() + 1}`;
+  };
+  const startYear = new Date(startIso + 'T00:00:00Z').getUTCFullYear();
+  const endYear = new Date(endIso + 'T00:00:00Z').getUTCFullYear();
+  windowLabel.textContent = startYear === endYear
+    ? `${fmt(startIso)} – ${fmt(endIso)} ${endYear}`
+    : `${fmt(startIso)}/${startYear} – ${fmt(endIso)}/${endYear}`;
+
+  // Disable next button when at latest window
+  document.getElementById('vo2-next').disabled = isLatestWindow;
+  // Disable prev button when going further back would show no data
+  const earliest = entries[0].date;
+  document.getElementById('vo2-prev').disabled = (startIso <= earliest);
+
+  // Headline + pace: only meaningful for latest window (current trajectory)
+  if (isLatestWindow) {
+    const first = entries[0]; // lifetime first
+    const latest = entries[entries.length - 1];
+    const delta = latest.value - first.value;
+    headline.innerHTML = `Current: <strong>${latest.value}</strong> (${latest.date}) · ` +
+      `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} since ${first.date}`;
+
+    const now = new Date(latest.date + 'T00:00:00Z');
+    const nextGoal = VO2_GOALS.find(g => new Date(g.date + 'T00:00:00Z') > now);
+    if (nextGoal) {
+      const daysToGoal = (new Date(nextGoal.date + 'T00:00:00Z') - now) / 86400000;
+      const needed = nextGoal.value - latest.value;
+      const rateNeeded = needed / (daysToGoal / 30);
+      let verdict;
+      if (needed <= 0) verdict = 'already at or above this goal ✓';
+      else if (rateNeeded < 0.5) verdict = 'on pace';
+      else if (rateNeeded < 1.0) verdict = 'tight but achievable';
+      else verdict = 'behind schedule';
+      pace.textContent = `Next goal: ${nextGoal.label}. Need +${needed.toFixed(1)} in ${Math.round(daysToGoal)} days (${rateNeeded.toFixed(2)}/month) — ${verdict}.`;
+    } else {
+      pace.textContent = 'All defined goals passed.';
+    }
   } else {
-    pace.textContent = 'All defined goals passed.';
+    // Historical window: show window-local stats only
+    if (inWindow.length === 0) {
+      headline.textContent = 'No readings in this window.';
+      pace.textContent = '';
+    } else {
+      const wFirst = inWindow[0];
+      const wLast = inWindow[inWindow.length - 1];
+      const wDelta = wLast.value - wFirst.value;
+      headline.innerHTML = `Window: <strong>${wFirst.value}</strong> → <strong>${wLast.value}</strong> · ` +
+        `${wDelta >= 0 ? '+' : ''}${wDelta.toFixed(1)} over ${inWindow.length} reading${inWindow.length === 1 ? '' : 's'}`;
+      pace.textContent = '';
+    }
   }
 
-  // Build dataset: actual readings + goal trajectory from latest reading
-  const actualPoints = entries.map(e => ({ x: e.date, y: e.value }));
-  const goalPoints = [
-    { x: latest.date, y: latest.value },
-    ...VO2_GOALS
-      .filter(g => new Date(g.date) > new Date(latest.date))
-      .map(g => ({ x: g.date, y: g.value })),
+  // Build datasets — only show goal line on latest window
+  const actualPoints = inWindow.map(e => ({ x: e.date, y: e.value }));
+  const datasets = [
+    {
+      label: 'Actual',
+      data: actualPoints,
+      borderColor: '#86efac',
+      backgroundColor: 'rgba(74, 222, 128, 0.15)',
+      tension: 0.3,
+      pointRadius: 4,
+      pointHoverRadius: 7,
+    },
   ];
+  if (isLatestWindow && actualPoints.length > 0) {
+    const latest = entries[entries.length - 1];
+    const goalPoints = [
+      { x: latest.date, y: latest.value },
+      ...VO2_GOALS
+        .filter(g => new Date(g.date) > new Date(latest.date))
+        .map(g => ({ x: g.date, y: g.value })),
+    ];
+    if (goalPoints.length > 1) {
+      datasets.push({
+        label: 'Goal trajectory',
+        data: goalPoints,
+        borderColor: '#fbbf24',
+        backgroundColor: 'transparent',
+        borderDash: [5, 5],
+        pointRadius: 4,
+        pointStyle: 'triangle',
+        tension: 0,
+      });
+    }
+  }
+
+  // Y axis: zoom in on the window's value range to make small movements visible
+  const valuesInWindow = inWindow.map(e => e.value);
+  const yMin = valuesInWindow.length ? Math.min(...valuesInWindow) - 2 : 45;
+  const yMax = isLatestWindow ? 62 : (valuesInWindow.length ? Math.max(...valuesInWindow) + 2 : 60);
 
   analyzeCharts.vo2 = new Chart(ctx, {
     type: 'line',
-    data: {
-      datasets: [
-        {
-          label: 'Actual',
-          data: actualPoints,
-          borderColor: '#86efac',
-          backgroundColor: 'rgba(74, 222, 128, 0.15)',
-          tension: 0.3,
-          pointRadius: 5,
-          pointHoverRadius: 7,
-        },
-        {
-          label: 'Goal trajectory',
-          data: goalPoints,
-          borderColor: '#fbbf24',
-          backgroundColor: 'transparent',
-          borderDash: [5, 5],
-          pointRadius: 4,
-          pointStyle: 'triangle',
-          tension: 0,
-        },
-      ],
-    },
+    data: { datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -4459,6 +4522,10 @@ function renderVo2Chart(entries) {
         x: {
           type: 'time',
           time: { unit: 'month', displayFormats: { month: 'MMM yy' } },
+          min: startIso,
+          max: isLatestWindow
+            ? VO2_GOALS[VO2_GOALS.length - 1].date
+            : endIso,
           ticks: { color: '#94a3b8' },
           grid: { color: 'rgba(255,255,255,0.05)' },
         },
@@ -4466,13 +4533,27 @@ function renderVo2Chart(entries) {
           title: { display: true, text: 'ml/kg/min', color: '#94a3b8' },
           ticks: { color: '#94a3b8' },
           grid: { color: 'rgba(255,255,255,0.05)' },
-          min: Math.min(45, Math.floor(first.value - 2)),
-          max: 62,
+          min: Math.floor(yMin),
+          max: Math.ceil(yMax),
         },
       },
     },
   });
 }
+
+document.getElementById('vo2-prev').addEventListener('click', () => {
+  vo2Anchor = isoBack(vo2Anchor, VO2_WINDOW_DAYS);
+  renderVo2Chart(vo2EntriesCache);
+});
+document.getElementById('vo2-next').addEventListener('click', () => {
+  const next = isoForward(vo2Anchor, VO2_WINDOW_DAYS);
+  if (next > todayIso()) {
+    vo2Anchor = todayIso();
+  } else {
+    vo2Anchor = next;
+  }
+  renderVo2Chart(vo2EntriesCache);
+});
 
 
 // ============================================================
