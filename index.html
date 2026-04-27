@@ -597,6 +597,15 @@
   }
   .kpi.tappable.selected .lbl-only { color: #86efac; }
 
+  /* Subtitle line under each By-type tile (count + average) */
+  .bt-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: center;
+    line-height: 1.3;
+    padding-bottom: 6px;
+  }
+
   .chart-wrap {
     position: relative;
     height: 240px;
@@ -1155,15 +1164,19 @@
       <div class="bytype-grid">
         <div class="kpi tappable" id="bt-tile-4x4" data-bt="4x4" role="button" tabindex="0">
           <div class="lbl-only">4×4</div>
+          <div class="bt-sub" id="bt-sub-4x4">–</div>
         </div>
         <div class="kpi tappable" id="bt-tile-hwpo_intervals" data-bt="hwpo_intervals" role="button" tabindex="0">
           <div class="lbl-only">HWPO</div>
+          <div class="bt-sub" id="bt-sub-hwpo_intervals">–</div>
         </div>
         <div class="kpi tappable" id="bt-tile-long_run" data-bt="long_run" role="button" tabindex="0">
           <div class="lbl-only">Long</div>
+          <div class="bt-sub" id="bt-sub-long_run">–</div>
         </div>
         <div class="kpi tappable" id="bt-tile-z2" data-bt="z2" role="button" tabindex="0">
           <div class="lbl-only">Zone 2</div>
+          <div class="bt-sub" id="bt-sub-z2">–</div>
         </div>
       </div>
       <div id="bt-detail" class="kpi-detail" style="display:none"></div>
@@ -1214,7 +1227,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-6';
+const APP_VERSION = '2026-04-21-7';
 
 // ============================================================
 // IndexedDB setup
@@ -3116,6 +3129,60 @@ function renderLast7Days(rows) {
   if (kpiExpanded) renderKpiDetail(kpiExpanded);
   // Refresh by-type expansion if any (lifetime data, but allRowsCache changed)
   if (btExpanded) renderByTypeDetail(btExpanded);
+  // Always refresh the by-type tile sub-labels (counts + averages)
+  renderByTypeSummary();
+}
+
+// Per-tile sub-label: "<n> sessions · avg <metric>". Lifetime, not windowed.
+function renderByTypeSummary() {
+  const all = allRowsCache || [];
+  function statsFor(type) {
+    return all.filter(r => r.type === type);
+  }
+  function avg(arr, fn) {
+    const vals = arr.map(fn).filter(v => v != null && !isNaN(v));
+    if (vals.length === 0) return null;
+    return vals.reduce((s, v) => s + v, 0) / vals.length;
+  }
+  function setSub(id, n, avgText) {
+    const el = document.getElementById('bt-sub-' + id);
+    if (!el) return;
+    if (n === 0) {
+      el.textContent = '0 sessions';
+      return;
+    }
+    el.textContent = `${n} session${n === 1 ? '' : 's'} · avg ${avgText}`;
+  }
+
+  // 4×4 — avg Z4+Z5 minutes
+  {
+    const s = statsFor('4x4');
+    const a = avg(s, r => (r.z4 ?? 0) + (r.z5 ?? 0));
+    setSub('4x4', s.length, a == null ? '–' : `${a.toFixed(1)}m`);
+  }
+  // HWPO — avg Z4+Z5 minutes
+  {
+    const s = statsFor('hwpo_intervals');
+    const a = avg(s, r => (r.z4 ?? 0) + (r.z5 ?? 0));
+    setSub('hwpo_intervals', s.length, a == null ? '–' : `${a.toFixed(1)}m`);
+  }
+  // Long — avg distance (km), fall back to duration
+  {
+    const s = statsFor('long_run');
+    const aDist = avg(s, r => r.distanceKm);
+    if (aDist != null) {
+      setSub('long_run', s.length, `${aDist.toFixed(1)} km`);
+    } else {
+      const aDur = avg(s, r => r.mins);
+      setSub('long_run', s.length, aDur == null ? '–' : `${Math.round(aDur)}m`);
+    }
+  }
+  // Zone 2 — avg duration
+  {
+    const s = statsFor('z2');
+    const a = avg(s, r => r.mins);
+    setSub('z2', s.length, a == null ? '–' : `${Math.round(a)}m`);
+  }
 }
 
 // Build the contextual list of sessions for a given KPI within the current
