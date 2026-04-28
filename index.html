@@ -948,6 +948,23 @@
     gap: 8px;
     margin-bottom: 10px;
   }
+  .ex-main-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+  }
+  .ex-main-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #60a5fa;
+    cursor: pointer;
+    margin: 0;
+  }
   .ex-last-time {
     font-size: 11px;
     color: var(--text-dim);
@@ -1467,7 +1484,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-21';
+const APP_VERSION = '2026-04-21-22';
 
 // ============================================================
 // IndexedDB setup
@@ -2442,6 +2459,8 @@ function renderAccessoryBody(container, ex, exIdx) {
 
 // Main lift body: # sets and # reps inputs at the top, then a generated grid
 // of rows with the rep count pre-filled and one weight input per set.
+// A "Variable reps" checkbox switches per-row reps between read-only display
+// and editable inputs — useful for AMRAP / max-rep schemes.
 function renderMainLiftBody(container, ex, exIdx) {
   // Initialize sets if empty
   if (!ex.sets || ex.sets.length === 0) {
@@ -2451,14 +2470,18 @@ function renderMainLiftBody(container, ex, exIdx) {
   // Use the first set's reps as the "scheme reps" — stored on every set
   // because the schema doesn't have a separate scheme field.
   const schemeReps = ex.sets[0].reps ?? 5;
+  const variableReps = !!ex.variableReps;
 
   let rowsHtml = '';
   ex.sets.forEach((set, setIdx) => {
+    const repsCell = variableReps
+      ? `<input type="text" class="ex-set-input ex-main-r" inputmode="numeric" pattern="[0-9]*" value="${set.reps ?? ''}" data-set="${setIdx}">`
+      : `<div class="ex-set-num">${set.reps ?? schemeReps}</div>`;
     rowsHtml += `
       <div class="ex-sets-grid">
         <div class="ex-set-num">${setIdx + 1}</div>
         <input type="text" class="ex-set-input ex-main-w" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="${set.weight ?? ''}" data-set="${setIdx}">
-        <div class="ex-set-num">${set.reps ?? schemeReps}</div>
+        ${repsCell}
         <div></div>
       </div>
     `;
@@ -2472,9 +2495,13 @@ function renderMainLiftBody(container, ex, exIdx) {
       </div>
       <div>
         <div class="ex-sets-header">REPS</div>
-        <input type="text" class="ex-set-input ex-main-reps" inputmode="numeric" pattern="[0-9]*" value="${schemeReps}">
+        <input type="text" class="ex-set-input ex-main-reps" inputmode="numeric" pattern="[0-9]*" value="${schemeReps}" ${variableReps ? 'disabled' : ''}>
       </div>
     </div>
+    <label class="ex-main-toggle">
+      <input type="checkbox" class="ex-main-variable" ${variableReps ? 'checked' : ''}>
+      <span>Variable reps (e.g. AMRAP / max-reps per set)</span>
+    </label>
     <div class="ex-sets-grid">
       <div class="ex-sets-header" style="text-align:center">SET</div>
       <div class="ex-sets-header" style="text-align:center">WEIGHT (kg)</div>
@@ -2488,6 +2515,8 @@ function renderMainLiftBody(container, ex, exIdx) {
   // (preserving any weights already entered).
   const setsInput = container.querySelector('.ex-main-sets');
   const repsInput = container.querySelector('.ex-main-reps');
+  const variableCheckbox = container.querySelector('.ex-main-variable');
+
   function applyScheme() {
     readStrengthInputsFromDom();
     const newSets = parseInt(setsInput.value || '0', 10);
@@ -2500,7 +2529,10 @@ function renderMainLiftBody(container, ex, exIdx) {
       const existing = cur[i];
       next.push({
         weight: existing ? existing.weight : null,
-        reps: newReps,
+        // In variable mode keep each set's existing reps; in fixed mode apply newReps.
+        reps: strengthState[exIdx].variableReps && existing
+          ? existing.reps
+          : newReps,
       });
     }
     strengthState[exIdx].sets = next;
@@ -2508,6 +2540,12 @@ function renderMainLiftBody(container, ex, exIdx) {
   }
   setsInput.addEventListener('change', applyScheme);
   repsInput.addEventListener('change', applyScheme);
+
+  variableCheckbox.addEventListener('change', () => {
+    readStrengthInputsFromDom();
+    strengthState[exIdx].variableReps = variableCheckbox.checked;
+    renderStrengthForm();
+  });
 }
 
 // Read all inputs in the strength form into strengthState. Called before any
@@ -2530,9 +2568,19 @@ function readStrengthInputsFromDom() {
         const wVal = parseFloat((w.value || '').replace(',', '.'));
         st.sets[sIdx].weight = isNaN(wVal) ? null : wVal;
       });
-      // Reps come from the scheme input on the card; updates apply when the
-      // user changes that input (handled in renderMainLiftBody → applyScheme).
-      // No further work needed here for reps.
+      // Read the variable-reps checkbox state and persist it.
+      const varCb = card.querySelector('input.ex-main-variable');
+      if (varCb) st.variableReps = varCb.checked;
+      // In variable-reps mode, reps are editable per row; otherwise the scheme
+      // REPS input drives them (already handled by applyScheme on change).
+      if (st.variableReps) {
+        const rInputs = card.querySelectorAll('input.ex-main-r');
+        rInputs.forEach((r, sIdx) => {
+          if (!st.sets[sIdx]) return;
+          const rVal = parseInt((r.value || ''), 10);
+          st.sets[sIdx].reps = isNaN(rVal) ? null : rVal;
+        });
+      }
     } else {
       // Accessory: single weight, single reps, applied to all sets
       const wEl = card.querySelector('input.ex-acc-w');
@@ -2596,9 +2644,11 @@ function wireExerciseAutocomplete(input, suggestEl, exIdx, lastTimeEl) {
             if (nowMain) {
               // Main lift defaults: 5 sets × 5 reps, all weights blank
               strengthState[exIdx].sets = Array.from({ length: 5 }, () => ({ weight: null, reps: 5 }));
+              strengthState[exIdx].variableReps = false;
             } else {
               // Accessory: 4 identical blank sets
               strengthState[exIdx].sets = Array.from({ length: ACCESSORY_DEFAULT_SETS }, () => ({ weight: null, reps: null }));
+              delete strengthState[exIdx].variableReps;
             }
             renderStrengthForm();
             return;
@@ -2711,6 +2761,7 @@ async function loadSessionIntoForm(id) {
   if (s.type === 'strength') {
     strengthState = (s.exercises || []).map(ex => ({
       name: ex.name || '',
+      variableReps: !!ex.variableReps,
       sets: (ex.sets || []).map(set => ({
         weight: set.weight ?? null,
         reps: set.reps ?? null,
@@ -2817,12 +2868,17 @@ saveBtn.addEventListener('click', async () => {
       // Filter out exercises with no name and sets with both fields empty.
       const cleaned = strengthState
         .filter(ex => ex.name && ex.name.trim())
-        .map(ex => ({
-          name: ex.name.trim(),
-          sets: ex.sets
-            .filter(s => s.weight != null || s.reps != null)
-            .map(s => ({ weight: s.weight, reps: s.reps })),
-        }))
+        .map(ex => {
+          const out = {
+            name: ex.name.trim(),
+            sets: ex.sets
+              .filter(s => s.weight != null || s.reps != null)
+              .map(s => ({ weight: s.weight, reps: s.reps })),
+          };
+          // Only set the flag when true to avoid bloating saved data
+          if (ex.variableReps) out.variableReps = true;
+          return out;
+        })
         .filter(ex => ex.sets.length > 0);
       if (cleaned.length === 0) {
         toast('Add at least one exercise with a set', true);
