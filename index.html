@@ -946,10 +946,7 @@
     border-color: rgba(74, 222, 128, 0.5);
   }
   .program-session-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--border);
   }
@@ -958,59 +955,18 @@
     color: var(--text);
     font-size: 16px;
   }
-  .program-session-type {
-    color: var(--text-dim);
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .program-block {
-    margin-bottom: 14px;
-    padding: 10px 12px;
+  .program-session-text {
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    margin: 0;
+    padding: 12px;
     background: var(--surface);
     border-radius: 8px;
     border: 1px solid var(--border);
-  }
-  .program-block.warmup {
-    border-left: 3px solid #fbbf24;
-  }
-  .program-block-head {
-    font-size: 11px;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 8px;
-  }
-  .program-set {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 4px 12px;
-    padding: 6px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
-    font-size: 13px;
-  }
-  .program-set:last-child { border-bottom: none; }
-  .program-set-label {
-    color: var(--text);
-  }
-  .program-set-pace {
-    color: #93c5fd;
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-    font-weight: 600;
-  }
-  .program-set-rest {
-    color: var(--text-dim);
-    font-size: 11px;
-    grid-column: 1 / -1;
-  }
-  .program-set-notes {
-    color: var(--text-dim);
-    font-size: 11px;
-    margin-top: 4px;
-    grid-column: 1 / -1;
-    white-space: pre-wrap;
-    line-height: 1.5;
   }
   .program-pace-tier {
     display: inline-block;
@@ -1728,7 +1684,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-29';
+const APP_VERSION = '2026-04-21-30';
 
 // ============================================================
 // IndexedDB setup
@@ -5487,12 +5443,12 @@ async function enrichSessionWithWhoop(session) {
 
 let programData = null;
 let programCurrentWeek = 1;
-let programCurrentDayIdx = 0;
+let programCurrentDow = 'Monday'; // selected day-of-week
 
 const PROGRAM_DEFAULT_MILE_SECONDS = 401; // 6:41 — user's current mile time
+const PROGRAM_DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Saturday'];
 
 function programParseMileTime(s) {
-  // Accept "6:41" or "6.41" or "401" (already seconds). Return seconds or null.
   if (s == null) return null;
   s = String(s).trim();
   if (!s) return null;
@@ -5505,27 +5461,15 @@ function programParseMileTime(s) {
   }
   const n = parseFloat(s);
   if (isNaN(n)) return null;
-  // Plain number under 30 → assume "minutes" (treat as m.ss-style? unlikely)
-  // Plain number above 100 → assume seconds
   if (n >= 100) return Math.round(n);
   return null;
 }
 
-function programFormatPace(seconds, suffix = '/mile') {
-  // Returns "m:ss/mile" or "—" if invalid
+function programFormatPaceMinSec(seconds) {
   if (seconds == null || isNaN(seconds) || seconds <= 0) return '—';
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
-  return `${m}:${String(s).padStart(2, '0')}${suffix}`;
-}
-
-function programFormatDuration(seconds) {
-  if (seconds == null) return '';
-  const total = Math.round(seconds);
-  if (total < 60) return `${total}s`;
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return s > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${m}:00`;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 // Fetch program.json from the data repo (or local cache if present).
@@ -5534,17 +5478,11 @@ async function loadProgramData() {
   const cached = await getConfig('program_data');
   if (cached) programData = cached;
 
-  // Then try to refresh from GitHub (best-effort)
-  // Use the GitHub Contents API rather than raw.githubusercontent.com, because
-  // raw.* doesn't authenticate Bearer tokens — it returns 404 for private
-  // repos. The Contents API + 'Accept: application/vnd.github.raw' returns
-  // the file body directly as JSON text.
+  // Then try to refresh from GitHub Contents API (best-effort)
   if (ghConfig) {
     try {
       const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/program.json`;
-      const headers = {
-        Accept: 'application/vnd.github.raw',
-      };
+      const headers = { Accept: 'application/vnd.github.raw' };
       if (ghConfig.token) headers.Authorization = `Bearer ${ghConfig.token}`;
       const res = await fetch(url, { headers, cache: 'no-cache' });
       if (res.ok) {
@@ -5552,7 +5490,7 @@ async function loadProgramData() {
         programData = data;
         await setConfig('program_data', data);
       } else {
-        console.warn('[program] fetch returned', res.status, await res.text().catch(() => ''));
+        console.warn('[program] fetch returned', res.status);
       }
     } catch (e) {
       console.warn('[program] fetch failed', e);
@@ -5561,58 +5499,22 @@ async function loadProgramData() {
   return programData;
 }
 
-// Compute pace seconds for a given set, factoring in user's mile time.
-// Returns null if no pace info on the set.
-function programPaceForSet(set, mileSeconds) {
-  if (!programData || mileSeconds == null) return null;
-  const ratio = mileSeconds / programData.baseline_mile_seconds;
-
-  // 1) Explicit pace_mile_s provided in CSV (rare)
-  if (set.pace_mile_s != null) {
-    if (set.pace_mile_high_s != null) {
-      return {
-        low: set.pace_mile_s * ratio,
-        high: set.pace_mile_high_s * ratio,
-      };
+// Render a token stream into a string. Each token is either {lit: "..."} or
+// {pace: {base: N, offset: N}}. Pace formula: TEXT(INT((base*ratio + offset)/60))
+// :TEXT(INT(MOD(base*ratio + offset, 60))) → m:ss/mile (the suffix is in the
+// adjacent literal token).
+function programRenderTokens(tokens, mileSeconds) {
+  if (!Array.isArray(tokens)) return '';
+  if (mileSeconds == null) mileSeconds = PROGRAM_DEFAULT_MILE_SECONDS;
+  const ratio = mileSeconds / (programData?.baseline_mile_seconds || 400);
+  return tokens.map(t => {
+    if (t.lit != null) return t.lit;
+    if (t.pace != null) {
+      const seconds = t.pace.base * ratio + (t.pace.offset || 0);
+      return programFormatPaceMinSec(seconds);
     }
-    return { value: set.pace_mile_s * ratio };
-  }
-
-  // 2) Threshold percentage band — pct of threshold (441s baseline mile pace)
-  if (set.pct_threshold_low != null) {
-    const tBase = programData.pace_tiers.threshold || 441;
-    // % of threshold means a fraction of pace at threshold.
-    // E.g. 110% threshold = pace is 1.10× threshold pace? In running, % of LT is
-    // typically expressed as "% of threshold pace" where higher % = faster.
-    // The CSV's Pct_Threshold values pair with a pace, so the simplest path is
-    // to derive: pace_s = threshold_base / (pct/100) × ratio.
-    const lo = tBase / (set.pct_threshold_high / 100) * ratio; // higher % = faster
-    const hi = tBase / (set.pct_threshold_low / 100) * ratio;
-    return { low: lo, high: hi };
-  }
-
-  // 3) Goal pace (5k / 10k / 20k) with optional offset per mile
-  if (set.goal_distance_km != null) {
-    const baselines = programData.goal_pace_baselines_per_mile || {};
-    const base = baselines[String(set.goal_distance_km)] || baselines[String(Math.round(set.goal_distance_km))];
-    if (base != null) {
-      const offset = set.goal_offset_s_per_mile || 0;
-      return { value: base * ratio + offset };
-    }
-  }
-
-  // 4) Intensity-based qualitative paces (Easy/Moderate/Hard/Recovery/Zone 2/Strides etc.)
-  // No prescribed numeric pace — return null and let UI show duration only.
-  return null;
-}
-
-function programFormatSetPace(pace) {
-  if (!pace) return '';
-  if (pace.value != null) return programFormatPace(pace.value);
-  if (pace.low != null && pace.high != null) {
-    return `${programFormatPace(pace.low, '')}–${programFormatPace(pace.high, '/mile')}`;
-  }
-  return '';
+    return '';
+  }).join('');
 }
 
 // Compute current week from start date and today.
@@ -5632,7 +5534,6 @@ async function renderProgram() {
   const emptyMsg = document.getElementById('program-empty-msg');
   const session = document.getElementById('program-session');
 
-  // Ensure program data loaded
   if (!programData) {
     empty.style.display = 'block';
     emptyMsg.textContent = 'Loading program…';
@@ -5645,13 +5546,13 @@ async function renderProgram() {
   }
   empty.style.display = 'none';
 
-  // Read mile time and start date from config (or defaults)
+  // Read mile time and start date from config
   let mileSeconds = await getConfig('program_mile_seconds');
   if (mileSeconds == null) mileSeconds = PROGRAM_DEFAULT_MILE_SECONDS;
   let startDate = await getConfig('program_start_date');
   if (!startDate) startDate = todayIso();
 
-  // Populate top inputs
+  // Bind input fields once
   const mileEl = document.getElementById('program-mile');
   const startEl = document.getElementById('program-start');
   if (mileEl && !mileEl.dataset.bound) {
@@ -5675,23 +5576,20 @@ async function renderProgram() {
     startEl.addEventListener('change', async () => {
       if (startEl.value) {
         await setConfig('program_start_date', startEl.value);
-        // Reset to current week relative to new start
         programCurrentWeek = programComputeCurrentWeek(startEl.value);
-        programCurrentDayIdx = 0;
         renderProgram();
       }
     });
   }
 
-  // Initialize current week if needed (only on first render)
-  if (programCurrentWeek === 1 && !window._programWeekInitialized) {
+  // Initialize current week on first render
+  if (!window._programWeekInitialized) {
     programCurrentWeek = programComputeCurrentWeek(startDate);
     window._programWeekInitialized = true;
   }
 
   // Pace tiers display
   const tiers = programData.pace_tiers || {};
-  const tiersEl = document.getElementById('program-pace-tiers');
   const ratio = mileSeconds / programData.baseline_mile_seconds;
   const tiersHtml = [
     ['5K', tiers['5K_race']],
@@ -5699,9 +5597,9 @@ async function renderProgram() {
     ['Thresh', tiers['threshold']],
     ['Tempo', tiers['tempo']],
   ].filter(([_, v]) => v != null).map(([label, base]) =>
-    `<span class="program-pace-tier">${label}: <strong>${programFormatPace(base * ratio)}</strong></span>`
+    `<span class="program-pace-tier">${label}: <strong>${programFormatPaceMinSec(base * ratio)}/mi</strong></span>`
   ).join('');
-  tiersEl.innerHTML = tiersHtml;
+  document.getElementById('program-pace-tiers').innerHTML = tiersHtml;
 
   // Week label + nav
   const weekObj = programData.weeks.find(w => w.week === programCurrentWeek)
@@ -5711,82 +5609,61 @@ async function renderProgram() {
   document.getElementById('program-prev-week').disabled = (weekObj.week === 1);
   document.getElementById('program-next-week').disabled = (weekObj.week === programData.weeks.length);
 
-  // Day tabs (only days with sessions)
+  // Day tabs — fixed order Mon/Tue/Wed/Thu/Sat. Disabled for days with no
+  // session this week (shown grey, not clickable).
   const dayTabs = document.getElementById('program-day-tabs');
-  if (programCurrentDayIdx >= weekObj.days.length) programCurrentDayIdx = 0;
-  dayTabs.innerHTML = weekObj.days.map((d, i) =>
-    `<button type="button" class="program-day-tab ${i === programCurrentDayIdx ? 'active' : ''}" data-idx="${i}">${(d.dow || '').slice(0, 3)}</button>`
-  ).join('');
-  dayTabs.querySelectorAll('.program-day-tab').forEach(btn => {
+  // Pick a default selected day: the first day this week that has a session,
+  // unless the currently selected day still exists, in which case keep it.
+  const daysThisWeek = weekObj.days || {};
+  const dayOrder = programData.day_order || PROGRAM_DAY_ORDER;
+  if (!daysThisWeek[programCurrentDow]) {
+    programCurrentDow = dayOrder.find(d => daysThisWeek[d]) || dayOrder[0];
+  }
+  dayTabs.innerHTML = dayOrder.map(dow => {
+    const has = !!daysThisWeek[dow];
+    const active = dow === programCurrentDow ? 'active' : '';
+    const disabled = has ? '' : 'disabled';
+    return `<button type="button" class="program-day-tab ${active}" data-dow="${dow}" ${disabled} style="${has ? '' : 'opacity:0.3;cursor:not-allowed'}">${dow.slice(0, 3)}</button>`;
+  }).join('');
+  dayTabs.querySelectorAll('.program-day-tab[data-dow]').forEach(btn => {
     btn.addEventListener('click', () => {
-      programCurrentDayIdx = parseInt(btn.dataset.idx, 10);
+      if (btn.disabled) return;
+      programCurrentDow = btn.dataset.dow;
       renderProgram();
     });
   });
 
-  // Render the selected day's session
-  const day = weekObj.days[programCurrentDayIdx];
-  if (!day) {
-    session.innerHTML = '<div class="chart-note">No sessions in this week.</div>';
+  // Render the selected day as a single preformatted text block.
+  const tokens = daysThisWeek[programCurrentDow];
+  if (!tokens || tokens.length === 0) {
+    session.innerHTML = '<div class="chart-note">No session prescribed for this day.</div>';
     return;
   }
-
-  let html = `
+  const text = programRenderTokens(tokens, mileSeconds);
+  session.innerHTML = `
     <div class="program-session-header">
-      <h3>${day.dow}</h3>
-      <span class="program-session-type">${day.session_type || ''}</span>
+      <h3>${programCurrentDow}</h3>
     </div>
+    <pre class="program-session-text">${escapeHtml(text)}</pre>
   `;
+}
 
-  for (const block of day.blocks) {
-    const wuClass = block.is_warmup ? 'warmup' : '';
-    const head = block.is_warmup
-      ? 'Warm-up'
-      : `Block ${block.block}${block.sets.length > 1 ? ` (${block.sets.length} reps)` : ''}`;
-    html += `<div class="program-block ${wuClass}">`;
-    html += `<div class="program-block-head">${head}</div>`;
-    for (const set of block.sets) {
-      const pace = programPaceForSet(set, mileSeconds);
-      const paceTxt = programFormatSetPace(pace);
-      // Build the left-hand label: distance/duration + intensity
-      let lhs = '';
-      if (set.distance_m != null) {
-        lhs += set.distance_m >= 1000
-          ? `${(set.distance_m / 1000).toFixed(set.distance_m % 1000 === 0 ? 0 : 2)} km`
-          : `${set.distance_m} m`;
-      } else if (set.duration_s != null) {
-        lhs += programFormatDuration(set.duration_s);
-      }
-      if (set.intensity) lhs += ` · ${set.intensity}`;
-
-      html += `<div class="program-set">
-        <div class="program-set-label">${lhs}</div>
-        <div class="program-set-pace">${paceTxt}</div>`;
-      if (set.rest_s != null) {
-        html += `<div class="program-set-rest">Rest ${programFormatDuration(set.rest_s)}</div>`;
-      }
-      if (set.notes) {
-        html += `<div class="program-set-notes">${set.notes.replace(/-----/g, '').trim()}</div>`;
-      }
-      html += `</div>`;
-    }
-    html += `</div>`;
-  }
-
-  session.innerHTML = html;
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 document.getElementById('program-prev-week').addEventListener('click', () => {
   if (programCurrentWeek > 1) {
     programCurrentWeek--;
-    programCurrentDayIdx = 0;
     renderProgram();
   }
 });
 document.getElementById('program-next-week').addEventListener('click', () => {
   if (programData && programCurrentWeek < programData.weeks.length) {
     programCurrentWeek++;
-    programCurrentDayIdx = 0;
     renderProgram();
   }
 });
