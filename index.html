@@ -227,6 +227,29 @@
     color: #93c5fd;
     border-color: rgba(96, 165, 250, 0.5);
   }
+  /* Reuse log-mode-toggle layout for History tab filter buttons */
+  .history-mode-btn {
+    padding: 14px 8px;
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .history-mode-btn.active[data-mode="run"] {
+    background: rgba(74, 222, 128, 0.15);
+    color: #86efac;
+    border-color: rgba(74, 222, 128, 0.5);
+  }
+  .history-mode-btn.active[data-mode="workout"] {
+    background: rgba(96, 165, 250, 0.15);
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.5);
+  }
 
   .row-3 {
     display: grid;
@@ -1276,6 +1299,10 @@
   <!-- HISTORY VIEW -->
   <section class="view" id="view-list">
     <div id="sync-banner" class="sync-banner" style="display:none"></div>
+    <div class="log-mode-toggle">
+      <button type="button" class="history-mode-btn active" data-mode="run">Runs</button>
+      <button type="button" class="history-mode-btn" data-mode="workout">Workouts</button>
+    </div>
     <div id="entries-container"></div>
     <div class="empty-state" id="empty-state" style="display:none">
       <div class="icon">📊</div>
@@ -1518,7 +1545,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-24';
+const APP_VERSION = '2026-04-21-25';
 
 // ============================================================
 // IndexedDB setup
@@ -2270,7 +2297,10 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('view-' + tab.dataset.view).classList.add('active');
-    if (tab.dataset.view === 'list') renderList();
+    if (tab.dataset.view === 'list') {
+      // Reset to default (Runs) every time the History tab opens
+      setHistoryMode('run');
+    }
     if (tab.dataset.view === 'settings') renderSettings();
     if (tab.dataset.view === 'analyze') renderAnalyze();
     if (tab.dataset.view === 'log') loadStrengthLastTimeCache();
@@ -3100,9 +3130,17 @@ function resetForm() {
 // ============================================================
 // History list
 // ============================================================
+let currentHistoryMode = 'run'; // 'run' | 'workout' — defaults to run on every History tab visit
+
 async function renderList() {
-  const entries = await getAllSessions();
+  let entries = await getAllSessions();
   entries.sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+  // Filter by current mode: 'workout' shows only strength, 'run' shows everything else
+  if (currentHistoryMode === 'workout') {
+    entries = entries.filter(e => e.type === 'strength');
+  } else {
+    entries = entries.filter(e => e.type !== 'strength');
+  }
 
   const container = document.getElementById('entries-container');
   const empty = document.getElementById('empty-state');
@@ -3186,6 +3224,28 @@ async function renderList() {
     el.addEventListener('click', () => openModal(el.dataset.id));
   });
 }
+
+// Switch the History tab between Runs and Workouts views. The empty-state
+// message is also tweaked to reflect the current filter so it's not just
+// "No sessions logged yet" when you have data, but it's all the other type.
+function setHistoryMode(mode) {
+  if (mode !== 'run' && mode !== 'workout') mode = 'run';
+  currentHistoryMode = mode;
+  document.querySelectorAll('.history-mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  // Update empty-state message so it accurately reflects the active filter.
+  const emptyEl = document.getElementById('empty-state');
+  if (emptyEl) {
+    const label = mode === 'workout' ? 'workouts' : 'runs';
+    emptyEl.querySelector('div:last-child').textContent = `No ${label} logged yet.`;
+  }
+  renderList();
+}
+
+document.querySelectorAll('.history-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => setHistoryMode(btn.dataset.mode));
+});
 
 // ============================================================
 // Detail modal
