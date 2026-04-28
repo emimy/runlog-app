@@ -912,6 +912,42 @@
   .ex-suggest-item:last-child { border-bottom: none; }
   .ex-suggest-item:active,
   .ex-suggest-item.highlighted { background: rgba(74, 222, 128, 0.12); }
+  .ex-suggest-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    background: rgba(96, 165, 250, 0.2);
+    color: #93c5fd;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    vertical-align: middle;
+  }
+  /* Accessory body: SETS readout + WEIGHT + REPS in a 3-col grid */
+  .ex-acc-grid {
+    display: grid;
+    grid-template-columns: 60px 1fr 1fr;
+    gap: 8px;
+    align-items: end;
+  }
+  .ex-acc-sets-readout {
+    text-align: center;
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 600;
+    padding: 7px 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  /* Main lift body: SETS + REPS scheme inputs */
+  .ex-main-scheme {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
   .ex-last-time {
     font-size: 11px;
     color: var(--text-dim);
@@ -1431,7 +1467,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-20';
+const APP_VERSION = '2026-04-21-21';
 
 // ============================================================
 // IndexedDB setup
@@ -1604,6 +1640,29 @@ const DEFAULT_RUN_KM = {
   '4x4': 5,
   'hwpo_intervals': 4,
 };
+
+// Main lifts use a different form flow (variable rep schemes per set) than
+// accessories (4 identical sets). Detected by name match; everything else
+// in STRENGTH_EXERCISES is treated as accessory.
+const MAIN_LIFTS = [
+  'Back Squat',
+  'Bench Press',
+  'Deadlift',
+  'Front Squat',
+  'Incline Bench Press',
+  'Push Press',
+  'Strict Press',
+];
+
+function isMainLift(name) {
+  if (!name) return false;
+  return MAIN_LIFTS.some(m => m.toLowerCase() === name.trim().toLowerCase());
+}
+
+// Default number of sets when creating a fresh accessory exercise card. The
+// data is stored as N identical {weight, reps} entries (no "is accessory" flag
+// in the schema — we infer from the exercise name).
+const ACCESSORY_DEFAULT_SETS = 4;
 
 // Curated list of strength exercises from your HWPO Strong programming.
 // Sorted alphabetically. Add to this list as your program evolves.
@@ -2268,7 +2327,15 @@ async function loadStrengthLastTimeCache() {
 
 function formatLastTime(entry) {
   if (!entry || !entry.sets || !entry.sets.length) return '';
-  const parts = entry.sets.map(set => {
+  // If all sets are identical (typical accessory pattern), compact to N × WkgxR.
+  // Otherwise list each set (typical for main lifts where weight ramps).
+  const sets = entry.sets;
+  const allIdentical = sets.every(s =>
+    s.weight === sets[0].weight && s.reps === sets[0].reps);
+  if (allIdentical && sets[0].weight != null && sets[0].reps != null) {
+    return `Last time (${entry.date}): <strong>${sets.length} × ${sets[0].weight}kg × ${sets[0].reps}</strong>`;
+  }
+  const parts = sets.map(set => {
     const w = set.weight;
     const r = set.reps;
     if (w == null || r == null) return null;
@@ -2325,60 +2392,122 @@ function renderStrengthForm() {
     }
     card.appendChild(lastTime);
 
-    // Sets
-    const setsContainer = document.createElement('div');
-    setsContainer.className = 'ex-sets';
+    // Render body based on whether this is a main lift or an accessory.
+    const bodyContainer = document.createElement('div');
+    bodyContainer.className = 'ex-body';
+    if (isMainLift(ex.name)) {
+      renderMainLiftBody(bodyContainer, ex, exIdx);
+    } else {
+      renderAccessoryBody(bodyContainer, ex, exIdx);
+    }
+    card.appendChild(bodyContainer);
 
-    const header = document.createElement('div');
-    header.className = 'ex-sets-grid';
-    header.innerHTML = `
-      <div class="ex-sets-header" style="text-align:center">SET</div>
-      <div class="ex-sets-header" style="text-align:center">WEIGHT (kg)</div>
-      <div class="ex-sets-header" style="text-align:center">REPS</div>
-      <div></div>
-    `;
-    setsContainer.appendChild(header);
-
-    ex.sets.forEach((set, setIdx) => {
-      const row = document.createElement('div');
-      row.className = 'ex-sets-grid';
-      row.innerHTML = `
-        <div class="ex-set-num">${setIdx + 1}</div>
-        <input type="text" class="ex-set-input ex-w" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="${set.weight ?? ''}" data-set="${setIdx}">
-        <input type="text" class="ex-set-input ex-r" inputmode="numeric" pattern="[0-9]*" value="${set.reps ?? ''}" data-set="${setIdx}">
-        <button type="button" class="ex-set-remove" data-set="${setIdx}">×</button>
-      `;
-      setsContainer.appendChild(row);
-    });
-
-    const addSetBtn = document.createElement('button');
-    addSetBtn.type = 'button';
-    addSetBtn.className = 'ex-add-set';
-    addSetBtn.textContent = '+ Add set';
-    addSetBtn.addEventListener('click', () => {
-      // Snapshot inputs before re-rendering
-      readStrengthInputsFromDom();
-      strengthState[exIdx].sets.push({ weight: null, reps: null });
-      renderStrengthForm();
-    });
-    setsContainer.appendChild(addSetBtn);
-
-    // Set remove button handlers
-    setsContainer.querySelectorAll('.ex-set-remove').forEach(btn => {
-      btn.addEventListener('click', () => {
-        readStrengthInputsFromDom();
-        const setIdx = parseInt(btn.dataset.set, 10);
-        strengthState[exIdx].sets.splice(setIdx, 1);
-        renderStrengthForm();
-      });
-    });
-
-    card.appendChild(setsContainer);
     list.appendChild(card);
 
     // Wire autocomplete on the search input
     wireExerciseAutocomplete(search, suggest, exIdx, lastTime);
   });
+}
+
+// Accessory body: one weight + one reps input. On save the form expands these
+// into N identical sets matching strengthState[exIdx].sets.length (default 4).
+function renderAccessoryBody(container, ex, exIdx) {
+  // Initialize sets if empty
+  if (!ex.sets || ex.sets.length === 0) {
+    ex.sets = Array.from({ length: ACCESSORY_DEFAULT_SETS }, () => ({ weight: null, reps: null }));
+  }
+  const numSets = ex.sets.length;
+  // For accessory display, use the first set as the canonical weight/reps.
+  // (Stored as N identical entries; reading from first is fine.)
+  const w = ex.sets[0].weight ?? '';
+  const r = ex.sets[0].reps ?? '';
+
+  container.innerHTML = `
+    <div class="ex-acc-grid">
+      <div>
+        <div class="ex-sets-header">SETS</div>
+        <div class="ex-acc-sets-readout">${numSets}</div>
+      </div>
+      <div>
+        <div class="ex-sets-header">WEIGHT (kg)</div>
+        <input type="text" class="ex-set-input ex-acc-w" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="${w}">
+      </div>
+      <div>
+        <div class="ex-sets-header">REPS</div>
+        <input type="text" class="ex-set-input ex-acc-r" inputmode="numeric" pattern="[0-9]*" value="${r}">
+      </div>
+    </div>
+  `;
+}
+
+// Main lift body: # sets and # reps inputs at the top, then a generated grid
+// of rows with the rep count pre-filled and one weight input per set.
+function renderMainLiftBody(container, ex, exIdx) {
+  // Initialize sets if empty
+  if (!ex.sets || ex.sets.length === 0) {
+    ex.sets = Array.from({ length: 5 }, () => ({ weight: null, reps: 5 }));
+  }
+  const numSets = ex.sets.length;
+  // Use the first set's reps as the "scheme reps" — stored on every set
+  // because the schema doesn't have a separate scheme field.
+  const schemeReps = ex.sets[0].reps ?? 5;
+
+  let rowsHtml = '';
+  ex.sets.forEach((set, setIdx) => {
+    rowsHtml += `
+      <div class="ex-sets-grid">
+        <div class="ex-set-num">${setIdx + 1}</div>
+        <input type="text" class="ex-set-input ex-main-w" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="${set.weight ?? ''}" data-set="${setIdx}">
+        <div class="ex-set-num">${set.reps ?? schemeReps}</div>
+        <div></div>
+      </div>
+    `;
+  });
+
+  container.innerHTML = `
+    <div class="ex-main-scheme">
+      <div>
+        <div class="ex-sets-header">SETS</div>
+        <input type="text" class="ex-set-input ex-main-sets" inputmode="numeric" pattern="[0-9]*" value="${numSets}">
+      </div>
+      <div>
+        <div class="ex-sets-header">REPS</div>
+        <input type="text" class="ex-set-input ex-main-reps" inputmode="numeric" pattern="[0-9]*" value="${schemeReps}">
+      </div>
+    </div>
+    <div class="ex-sets-grid">
+      <div class="ex-sets-header" style="text-align:center">SET</div>
+      <div class="ex-sets-header" style="text-align:center">WEIGHT (kg)</div>
+      <div class="ex-sets-header" style="text-align:center">REPS</div>
+      <div></div>
+    </div>
+    ${rowsHtml}
+  `;
+
+  // Wire scheme inputs: changing # sets or reps regenerates the rows
+  // (preserving any weights already entered).
+  const setsInput = container.querySelector('.ex-main-sets');
+  const repsInput = container.querySelector('.ex-main-reps');
+  function applyScheme() {
+    readStrengthInputsFromDom();
+    const newSets = parseInt(setsInput.value || '0', 10);
+    const newReps = parseInt(repsInput.value || '0', 10);
+    if (!newSets || newSets < 1 || newSets > 12) return;
+    if (!newReps || newReps < 1 || newReps > 30) return;
+    const cur = strengthState[exIdx].sets;
+    const next = [];
+    for (let i = 0; i < newSets; i++) {
+      const existing = cur[i];
+      next.push({
+        weight: existing ? existing.weight : null,
+        reps: newReps,
+      });
+    }
+    strengthState[exIdx].sets = next;
+    renderStrengthForm();
+  }
+  setsInput.addEventListener('change', applyScheme);
+  repsInput.addEventListener('change', applyScheme);
 }
 
 // Read all inputs in the strength form into strengthState. Called before any
@@ -2388,21 +2517,38 @@ function readStrengthInputsFromDom() {
   if (!list) return;
   const cards = list.querySelectorAll('.ex-card');
   cards.forEach((card, exIdx) => {
+    const st = strengthState[exIdx];
+    if (!st) return;
     const search = card.querySelector('input.ex-search');
-    if (search && strengthState[exIdx]) {
-      strengthState[exIdx].name = search.value.trim();
-    }
-    const wInputs = card.querySelectorAll('input.ex-w');
-    const rInputs = card.querySelectorAll('input.ex-r');
-    wInputs.forEach((w, sIdx) => {
-      const r = rInputs[sIdx];
-      const wVal = parseFloat((w.value || '').replace(',', '.'));
-      const rVal = parseInt((r ? r.value : '') || '', 10);
-      if (strengthState[exIdx].sets[sIdx]) {
-        strengthState[exIdx].sets[sIdx].weight = isNaN(wVal) ? null : wVal;
-        strengthState[exIdx].sets[sIdx].reps = isNaN(rVal) ? null : rVal;
+    if (search) st.name = search.value.trim();
+
+    if (isMainLift(st.name)) {
+      // Main lift: scheme inputs + per-row weight inputs
+      const wInputs = card.querySelectorAll('input.ex-main-w');
+      wInputs.forEach((w, sIdx) => {
+        if (!st.sets[sIdx]) return;
+        const wVal = parseFloat((w.value || '').replace(',', '.'));
+        st.sets[sIdx].weight = isNaN(wVal) ? null : wVal;
+      });
+      // Reps come from the scheme input on the card; updates apply when the
+      // user changes that input (handled in renderMainLiftBody → applyScheme).
+      // No further work needed here for reps.
+    } else {
+      // Accessory: single weight, single reps, applied to all sets
+      const wEl = card.querySelector('input.ex-acc-w');
+      const rEl = card.querySelector('input.ex-acc-r');
+      if (wEl && rEl) {
+        const wVal = parseFloat((wEl.value || '').replace(',', '.'));
+        const rVal = parseInt((rEl.value || ''), 10);
+        const w = isNaN(wVal) ? null : wVal;
+        const r = isNaN(rVal) ? null : rVal;
+        // Apply to every existing set (so the data model stores N identical entries)
+        for (let i = 0; i < st.sets.length; i++) {
+          st.sets[i].weight = w;
+          st.sets[i].reps = r;
+        }
       }
-    });
+    }
   });
 }
 
@@ -2413,22 +2559,54 @@ function wireExerciseAutocomplete(input, suggestEl, exIdx, lastTimeEl) {
       suggestEl.style.display = 'none';
       return;
     }
-    const matches = STRENGTH_EXERCISES.filter(e => e.toLowerCase().includes(q)).slice(0, 8);
+    // Combine main lifts (with a 'main' flag) and accessories. Main lifts
+    // bubble to the top of the suggestions so they're easy to find.
+    const mainMatches = MAIN_LIFTS
+      .filter(e => e.toLowerCase().includes(q))
+      .map(name => ({ name, main: true }));
+    const accMatches = STRENGTH_EXERCISES
+      .filter(e => e.toLowerCase().includes(q))
+      .map(name => ({ name, main: false }));
+    const matches = [...mainMatches, ...accMatches].slice(0, 8);
     if (matches.length === 0) {
       suggestEl.style.display = 'none';
       return;
     }
-    suggestEl.innerHTML = matches.map(e => `<div class="ex-suggest-item">${e}</div>`).join('');
+    suggestEl.innerHTML = matches.map(m => `
+      <div class="ex-suggest-item" data-name="${m.name}">
+        ${m.name}${m.main ? ' <span class="ex-suggest-badge">MAIN</span>' : ''}
+      </div>
+    `).join('');
     suggestEl.style.display = 'block';
     suggestEl.querySelectorAll('.ex-suggest-item').forEach(item => {
       item.addEventListener('mousedown', (e) => e.preventDefault()); // avoid blur before click
       item.addEventListener('click', () => {
-        input.value = item.textContent;
+        const picked = item.dataset.name;
+        input.value = picked;
         suggestEl.style.display = 'none';
-        if (strengthState[exIdx]) strengthState[exIdx].name = item.textContent;
+        if (strengthState[exIdx]) {
+          // Picking a main lift after an accessory (or vice versa) needs to
+          // switch the card layout. Re-rendering is the simplest correct way
+          // since the card structure differs between modes.
+          const wasMain = isMainLift(strengthState[exIdx].name);
+          const nowMain = isMainLift(picked);
+          strengthState[exIdx].name = picked;
+          if (wasMain !== nowMain) {
+            // Reset sets to mode-appropriate defaults so the user starts clean
+            if (nowMain) {
+              // Main lift defaults: 5 sets × 5 reps, all weights blank
+              strengthState[exIdx].sets = Array.from({ length: 5 }, () => ({ weight: null, reps: 5 }));
+            } else {
+              // Accessory: 4 identical blank sets
+              strengthState[exIdx].sets = Array.from({ length: ACCESSORY_DEFAULT_SETS }, () => ({ weight: null, reps: null }));
+            }
+            renderStrengthForm();
+            return;
+          }
+        }
         // Refresh "last time" line for this exercise
         if (lastTimeEl && strengthLastTimeCache) {
-          const entry = strengthLastTimeCache[item.textContent.toLowerCase()];
+          const entry = strengthLastTimeCache[picked.toLowerCase()];
           lastTimeEl.innerHTML = entry ? formatLastTime(entry) : '';
         }
       });
@@ -2448,14 +2626,12 @@ function wireExerciseAutocomplete(input, suggestEl, exIdx, lastTimeEl) {
 
 document.getElementById('strength-add-exercise').addEventListener('click', () => {
   readStrengthInputsFromDom();
+  // New cards default to accessory shape (4 identical blank sets). If the user
+  // picks a main lift in the autocomplete, the card body re-renders into
+  // main-lift mode and the sets reset to the main-lift default scheme.
   strengthState.push({
     name: '',
-    sets: [
-      { weight: null, reps: null },
-      { weight: null, reps: null },
-      { weight: null, reps: null },
-      { weight: null, reps: null },
-    ],
+    sets: Array.from({ length: ACCESSORY_DEFAULT_SETS }, () => ({ weight: null, reps: null })),
   });
   renderStrengthForm();
 });
@@ -2933,18 +3109,35 @@ async function openModal(id) {
       const exHtml = s.exercises.map((ex, idx) => {
         const sets = ex.sets || [];
         const totalSets = sets.length;
-        // Top set: highest weight × reps combination present
-        let topW = 0, topReps = 0;
-        for (const set of sets) {
-          if ((set.weight ?? 0) > topW) {
-            topW = set.weight ?? 0;
-            topReps = set.reps ?? 0;
+        const isMain = isMainLift(ex.name);
+
+        // Detect "all sets identical" — true for accessories (stored as N
+        // identical entries) and for main lifts where the lifter happened to
+        // use the same weight on every set.
+        const allIdentical = totalSets > 0 && sets.every(s2 =>
+          s2.weight === sets[0].weight && s2.reps === sets[0].reps);
+
+        let summary;
+        if (totalSets === 0) {
+          summary = 'no sets';
+        } else if (!isMain && allIdentical) {
+          // Accessory format: "4 × 25kg × 12"
+          const w = sets[0].weight;
+          const r = sets[0].reps;
+          summary = `${totalSets} × ${w != null ? w + 'kg' : '—'} × ${r != null ? r : '—'}`;
+        } else {
+          // Main lift (or non-identical accessory): show top set
+          let topW = 0, topReps = 0;
+          for (const set of sets) {
+            if ((set.weight ?? 0) > topW) {
+              topW = set.weight ?? 0;
+              topReps = set.reps ?? 0;
+            }
           }
+          summary = `${totalSets} set${totalSets === 1 ? '' : 's'}` +
+            (topW > 0 ? ` · top ${topW}kg × ${topReps}` : '');
         }
-        const summary = totalSets > 0
-          ? `${totalSets} set${totalSets === 1 ? '' : 's'}` +
-            (topW > 0 ? ` · top ${topW}kg × ${topReps}` : '')
-          : 'no sets';
+
         const setRows = sets.map((set, i) => `
           <div class="ex-set-row">
             <span class="ex-set-num-mod">${i + 1}.</span>
@@ -2953,7 +3146,7 @@ async function openModal(id) {
         `).join('');
         return `
           <div class="strength-modal-ex" data-ex-idx="${idx}">
-            <div class="ex-name">${ex.name}</div>
+            <div class="ex-name">${ex.name}${isMain ? ' <span class="ex-suggest-badge">MAIN</span>' : ''}</div>
             <div class="ex-summary">${summary}</div>
             <div class="ex-set-list">${setRows}</div>
           </div>
