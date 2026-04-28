@@ -1728,7 +1728,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-28';
+const APP_VERSION = '2026-04-21-29';
 
 // ============================================================
 // IndexedDB setup
@@ -5535,15 +5535,24 @@ async function loadProgramData() {
   if (cached) programData = cached;
 
   // Then try to refresh from GitHub (best-effort)
+  // Use the GitHub Contents API rather than raw.githubusercontent.com, because
+  // raw.* doesn't authenticate Bearer tokens — it returns 404 for private
+  // repos. The Contents API + 'Accept: application/vnd.github.raw' returns
+  // the file body directly as JSON text.
   if (ghConfig) {
     try {
-      const url = `https://raw.githubusercontent.com/${ghConfig.owner}/${ghConfig.repo}/main/program.json`;
-      const headers = ghConfig.token ? { Authorization: `Bearer ${ghConfig.token}` } : {};
+      const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/program.json`;
+      const headers = {
+        Accept: 'application/vnd.github.raw',
+      };
+      if (ghConfig.token) headers.Authorization = `Bearer ${ghConfig.token}`;
       const res = await fetch(url, { headers, cache: 'no-cache' });
       if (res.ok) {
         const data = await res.json();
         programData = data;
         await setConfig('program_data', data);
+      } else {
+        console.warn('[program] fetch returned', res.status, await res.text().catch(() => ''));
       }
     } catch (e) {
       console.warn('[program] fetch failed', e);
