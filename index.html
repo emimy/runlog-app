@@ -1265,7 +1265,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-18';
+const APP_VERSION = '2026-04-21-19';
 
 // ============================================================
 // IndexedDB setup
@@ -4397,6 +4397,14 @@ function renderVo2Chart(entries) {
   const headline = document.getElementById('vo2-headline');
   const pace = document.getElementById('vo2-pace');
   const windowLabel = document.getElementById('vo2-window-label');
+
+  // Tear down any previous chart instance on this canvas before re-rendering.
+  // Without this, navigating windows updates the dataset internally but Chart.js
+  // keeps drawing the original instance — the canvas appears frozen.
+  if (analyzeCharts.vo2) {
+    try { analyzeCharts.vo2.destroy(); } catch (e) {}
+    analyzeCharts.vo2 = null;
+  }
 
   if (entries.length === 0) {
     headline.textContent = 'No VO2 max readings yet. Add some in the Sync tab.';
