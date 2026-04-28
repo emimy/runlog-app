@@ -1265,7 +1265,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-17';
+const APP_VERSION = '2026-04-21-18';
 
 // ============================================================
 // IndexedDB setup
@@ -4471,7 +4471,8 @@ function renderVo2Chart(entries) {
     }
   }
 
-  // Build datasets — only show goal line on latest window
+  // Build datasets — only show goal line on latest window, and only to the
+  // *next* goal so it doesn't stretch out to 2027 and squash the actual data.
   const actualPoints = inWindow.map(e => ({ x: e.date, y: e.value }));
   const datasets = [
     {
@@ -4484,18 +4485,17 @@ function renderVo2Chart(entries) {
       pointHoverRadius: 7,
     },
   ];
+  let nextGoalForChart = null;
   if (isLatestWindow && actualPoints.length > 0) {
     const latest = entries[entries.length - 1];
-    const goalPoints = [
-      { x: latest.date, y: latest.value },
-      ...VO2_GOALS
-        .filter(g => new Date(g.date) > new Date(latest.date))
-        .map(g => ({ x: g.date, y: g.value })),
-    ];
-    if (goalPoints.length > 1) {
+    nextGoalForChart = VO2_GOALS.find(g => new Date(g.date) > new Date(latest.date));
+    if (nextGoalForChart) {
       datasets.push({
-        label: 'Goal trajectory',
-        data: goalPoints,
+        label: `Goal: ${nextGoalForChart.value} (${nextGoalForChart.label})`,
+        data: [
+          { x: latest.date, y: latest.value },
+          { x: nextGoalForChart.date, y: nextGoalForChart.value },
+        ],
         borderColor: '#fbbf24',
         backgroundColor: 'transparent',
         borderDash: [5, 5],
@@ -4509,7 +4509,12 @@ function renderVo2Chart(entries) {
   // Y axis: zoom in on the window's value range to make small movements visible
   const valuesInWindow = inWindow.map(e => e.value);
   const yMin = valuesInWindow.length ? Math.min(...valuesInWindow) - 2 : 45;
-  const yMax = isLatestWindow ? 62 : (valuesInWindow.length ? Math.max(...valuesInWindow) + 2 : 60);
+  const yMaxFromData = valuesInWindow.length ? Math.max(...valuesInWindow) : 50;
+  // On the latest window, lift the top to include the next goal value; otherwise
+  // just include actual values (no goal line drawn anyway).
+  const yMax = isLatestWindow && nextGoalForChart
+    ? Math.max(yMaxFromData, nextGoalForChart.value) + 2
+    : yMaxFromData + 2;
 
   analyzeCharts.vo2 = new Chart(ctx, {
     type: 'line',
@@ -4523,8 +4528,12 @@ function renderVo2Chart(entries) {
           type: 'time',
           time: { unit: 'month', displayFormats: { month: 'MMM yy' } },
           min: startIso,
-          max: isLatestWindow
-            ? VO2_GOALS[VO2_GOALS.length - 1].date
+          // Right edge: on the latest window, extend just to the next goal
+          // (with a tiny pad) so the goal segment is fully visible without
+          // wasting space on the right. On historical windows, end at the
+          // window's end.
+          max: isLatestWindow && nextGoalForChart
+            ? nextGoalForChart.date
             : endIso,
           ticks: { color: '#94a3b8' },
           grid: { color: 'rgba(255,255,255,0.05)' },
