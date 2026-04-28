@@ -942,6 +942,28 @@
     font-family: inherit;
     flex-shrink: 0;
   }
+  .ex-reorder {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .ex-reorder-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 9px;
+    line-height: 1;
+    cursor: pointer;
+    font-family: inherit;
+    min-height: 14px;
+  }
+  .ex-reorder-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
   .ex-suggest {
     position: absolute;
     top: 100%;
@@ -1111,6 +1133,15 @@
   .strength-modal-ex .ex-set-row .ex-set-num-mod {
     color: var(--text-dim);
     min-width: 20px;
+  }
+  .strength-modal-ex .ex-modal-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .strength-modal-ex .ex-modal-content {
+    flex: 1;
+    min-width: 0;
   }
 
   /* Filter chips */
@@ -1545,7 +1576,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-26';
+const APP_VERSION = '2026-04-21-27';
 
 // ============================================================
 // IndexedDB setup
@@ -2489,6 +2520,43 @@ function renderStrengthForm() {
     searchWrap.appendChild(suggest);
     head.appendChild(searchWrap);
 
+    // Reorder controls: up/down arrows that swap this card with its neighbour.
+    // Disabled at the boundaries. Reads inputs from DOM before mutating state
+    // so any unsaved typing is preserved across the re-render.
+    const reorderWrap = document.createElement('div');
+    reorderWrap.className = 'ex-reorder';
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'ex-reorder-btn';
+    upBtn.innerHTML = '▲';
+    upBtn.disabled = exIdx === 0;
+    upBtn.title = 'Move up';
+    upBtn.addEventListener('click', () => {
+      if (exIdx === 0) return;
+      readStrengthInputsFromDom();
+      const tmp = strengthState[exIdx];
+      strengthState[exIdx] = strengthState[exIdx - 1];
+      strengthState[exIdx - 1] = tmp;
+      renderStrengthForm();
+    });
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'ex-reorder-btn';
+    downBtn.innerHTML = '▼';
+    downBtn.disabled = exIdx === strengthState.length - 1;
+    downBtn.title = 'Move down';
+    downBtn.addEventListener('click', () => {
+      if (exIdx === strengthState.length - 1) return;
+      readStrengthInputsFromDom();
+      const tmp = strengthState[exIdx];
+      strengthState[exIdx] = strengthState[exIdx + 1];
+      strengthState[exIdx + 1] = tmp;
+      renderStrengthForm();
+    });
+    reorderWrap.appendChild(upBtn);
+    reorderWrap.appendChild(downBtn);
+    head.appendChild(reorderWrap);
+
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'ex-remove';
@@ -3271,6 +3339,147 @@ modalEdit.addEventListener('click', async () => {
   if (logTab) logTab.click();
 });
 
+// In-modal reorder state for strength sessions. modalReorderState is a working
+// copy of the session's exercises; modalOriginalOrderKey is a serialized
+// snapshot of the original order so we can detect whether changes were made
+// and show the Save button only when needed. Closing the modal discards the
+// working copy — saves are explicit via the Save Order button.
+let modalReorderState = null;
+let modalOriginalOrderKey = null;
+
+function serializeExerciseOrder(exs) {
+  // Use exercise names as the order key (acceptable since duplicate names
+  // within a single session are extremely rare in practice).
+  return (exs || []).map(e => e.name || '').join('||');
+}
+
+function renderStrengthModalExercises() {
+  const container = document.getElementById('modal-exercises');
+  if (!container || !modalReorderState) return;
+  const exs = modalReorderState;
+  const exHtml = exs.map((ex, idx) => {
+    const sets = ex.sets || [];
+    const totalSets = sets.length;
+    const isMain = isMainLift(ex.name);
+    const allIdentical = totalSets > 0 && sets.every(s2 =>
+      s2.weight === sets[0].weight && s2.reps === sets[0].reps);
+
+    let summary;
+    if (totalSets === 0) {
+      summary = 'no sets';
+    } else if (!isMain && allIdentical) {
+      const w = sets[0].weight;
+      const r = sets[0].reps;
+      summary = `${totalSets} × ${w != null ? w + 'kg' : '—'} × ${r != null ? r : '—'}`;
+    } else {
+      let topW = 0, topReps = 0;
+      for (const set of sets) {
+        if ((set.weight ?? 0) > topW) {
+          topW = set.weight ?? 0;
+          topReps = set.reps ?? 0;
+        }
+      }
+      summary = `${totalSets} set${totalSets === 1 ? '' : 's'}` +
+        (topW > 0 ? ` · top ${topW}kg × ${topReps}` : '');
+    }
+
+    const setRows = sets.map((set, i) => `
+      <div class="ex-set-row">
+        <span class="ex-set-num-mod">${i + 1}.</span>
+        <span>${set.weight != null ? set.weight + 'kg' : '—'} × ${set.reps != null ? set.reps : '—'}</span>
+      </div>
+    `).join('');
+
+    const upDisabled = idx === 0 ? 'disabled' : '';
+    const downDisabled = idx === exs.length - 1 ? 'disabled' : '';
+    return `
+      <div class="strength-modal-ex" data-ex-idx="${idx}">
+        <div class="ex-modal-row">
+          <div class="ex-modal-content">
+            <div class="ex-name">${ex.name}${isMain ? ' <span class="ex-suggest-badge">MAIN</span>' : ''}</div>
+            <div class="ex-summary">${summary}</div>
+          </div>
+          <div class="ex-reorder">
+            <button type="button" class="ex-reorder-btn ex-modal-up" data-ex-idx="${idx}" ${upDisabled}>▲</button>
+            <button type="button" class="ex-reorder-btn ex-modal-down" data-ex-idx="${idx}" ${downDisabled}>▼</button>
+          </div>
+        </div>
+        <div class="ex-set-list">${setRows}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Save Order button only appears when the working order differs from
+  // the original. Discarding by closing the modal requires no extra UI.
+  const orderChanged = serializeExerciseOrder(modalReorderState) !== modalOriginalOrderKey;
+  const saveBtnHtml = orderChanged
+    ? `<button type="button" id="modal-save-order" class="primary" style="margin-top:10px;width:100%">Save order</button>`
+    : '';
+
+  container.innerHTML = exHtml + saveBtnHtml;
+
+  // Wire tap-on-content (not on buttons) to expand sets
+  container.querySelectorAll('.strength-modal-ex .ex-modal-content').forEach(content => {
+    content.addEventListener('click', () => {
+      content.closest('.strength-modal-ex').classList.toggle('expanded');
+    });
+  });
+  // Wire reorder buttons. stopPropagation so the tap doesn't trigger the
+  // content's expand handler.
+  container.querySelectorAll('.ex-modal-up').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.exIdx, 10);
+      if (idx <= 0) return;
+      const tmp = modalReorderState[idx];
+      modalReorderState[idx] = modalReorderState[idx - 1];
+      modalReorderState[idx - 1] = tmp;
+      renderStrengthModalExercises();
+    });
+  });
+  container.querySelectorAll('.ex-modal-down').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.exIdx, 10);
+      if (idx >= modalReorderState.length - 1) return;
+      const tmp = modalReorderState[idx];
+      modalReorderState[idx] = modalReorderState[idx + 1];
+      modalReorderState[idx + 1] = tmp;
+      renderStrengthModalExercises();
+    });
+  });
+  // Wire Save Order
+  const saveBtn = container.querySelector('#modal-save-order');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      try {
+        const session = await getSession(currentModalId);
+        if (!session) throw new Error('Session not found');
+        session.exercises = modalReorderState;
+        session.syncState = ghConfig ? 'pending' : 'local_only';
+        await putSession(session);
+        // Best-effort GitHub sync — failure won't block the local update
+        if (ghConfig) {
+          ghPutSession(session).catch(e => console.warn('[reorder sync]', e));
+        }
+        // Update the snapshot so the Save button hides on next render
+        modalOriginalOrderKey = serializeExerciseOrder(modalReorderState);
+        renderStrengthModalExercises();
+        toast('Order saved');
+        // Refresh History list in the background
+        renderList();
+      } catch (e) {
+        console.error('[save order]', e);
+        toast('Failed to save order', true);
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save order';
+      }
+    });
+  }
+}
+
 async function openModal(id) {
   const s = await getSession(id);
   if (!s) return;
@@ -3289,73 +3498,24 @@ async function openModal(id) {
 
   // Strength sessions render entirely differently — exercise cards instead of
   // the running session key-value rows. No Whoop button (strength sessions
-  // aren't enriched).
+  // aren't enriched). Includes up/down reorder controls; the reorder is
+  // staged in modalReorderState and committed via a "Save order" button.
   if (s.type === 'strength') {
+    // Working copy: any reorder happens on this array. originalOrder is the
+    // ID-or-index sequence to compare against to decide whether to show Save.
+    modalReorderState = (s.exercises || []).map(ex => ({ ...ex }));
+    modalOriginalOrderKey = serializeExerciseOrder(modalReorderState);
+
     const rows = [
       ['Date', s.date],
       ['Type', meta.label],
     ];
     rows.push(['Logged at', new Date(s.createdAt).toLocaleString()]);
     let html = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
-
-    // Append exercise summary as a non-dl block by closing then re-opening
-    // the kv element. Easier: render exercises as a sibling div using
-    // dt/dd with a custom layout... but simplest is to inject as html below.
-    if (Array.isArray(s.exercises) && s.exercises.length > 0) {
-      const exHtml = s.exercises.map((ex, idx) => {
-        const sets = ex.sets || [];
-        const totalSets = sets.length;
-        const isMain = isMainLift(ex.name);
-
-        // Detect "all sets identical" — true for accessories (stored as N
-        // identical entries) and for main lifts where the lifter happened to
-        // use the same weight on every set.
-        const allIdentical = totalSets > 0 && sets.every(s2 =>
-          s2.weight === sets[0].weight && s2.reps === sets[0].reps);
-
-        let summary;
-        if (totalSets === 0) {
-          summary = 'no sets';
-        } else if (!isMain && allIdentical) {
-          // Accessory format: "4 × 25kg × 12"
-          const w = sets[0].weight;
-          const r = sets[0].reps;
-          summary = `${totalSets} × ${w != null ? w + 'kg' : '—'} × ${r != null ? r : '—'}`;
-        } else {
-          // Main lift (or non-identical accessory): show top set
-          let topW = 0, topReps = 0;
-          for (const set of sets) {
-            if ((set.weight ?? 0) > topW) {
-              topW = set.weight ?? 0;
-              topReps = set.reps ?? 0;
-            }
-          }
-          summary = `${totalSets} set${totalSets === 1 ? '' : 's'}` +
-            (topW > 0 ? ` · top ${topW}kg × ${topReps}` : '');
-        }
-
-        const setRows = sets.map((set, i) => `
-          <div class="ex-set-row">
-            <span class="ex-set-num-mod">${i + 1}.</span>
-            <span>${set.weight != null ? set.weight + 'kg' : '—'} × ${set.reps != null ? set.reps : '—'}</span>
-          </div>
-        `).join('');
-        return `
-          <div class="strength-modal-ex" data-ex-idx="${idx}">
-            <div class="ex-name">${ex.name}${isMain ? ' <span class="ex-suggest-badge">MAIN</span>' : ''}</div>
-            <div class="ex-summary">${summary}</div>
-            <div class="ex-set-list">${setRows}</div>
-          </div>
-        `;
-      }).join('');
-      html += `<dt style="margin-top:12px">Exercises</dt><dd style="margin-top:4px">${exHtml}</dd>`;
-    }
+    html += `<dt style="margin-top:12px">Exercises</dt><dd style="margin-top:4px"><div id="modal-exercises"></div></dd>`;
     modalKv.innerHTML = html;
 
-    // Wire tap-to-expand on each exercise card
-    modalKv.querySelectorAll('.strength-modal-ex').forEach(card => {
-      card.addEventListener('click', () => card.classList.toggle('expanded'));
-    });
+    renderStrengthModalExercises();
 
     whoopBtn.style.display = 'none';
     modalBg.classList.add('show');
