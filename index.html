@@ -903,6 +903,126 @@
     font-family: inherit;
   }
 
+  /* HWPO Run program viewer */
+  .program-header {
+    margin-bottom: 14px;
+    padding: 12px;
+    background: var(--surface);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .program-header label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .program-header input[type="text"],
+  .program-header input[type="date"] {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+  }
+  .program-day-tab {
+    padding: 6px 12px;
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .program-day-tab.active {
+    background: rgba(74, 222, 128, 0.15);
+    color: #86efac;
+    border-color: rgba(74, 222, 128, 0.5);
+  }
+  .program-session-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .program-session-header h3 {
+    margin: 0;
+    color: var(--text);
+    font-size: 16px;
+  }
+  .program-session-type {
+    color: var(--text-dim);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .program-block {
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .program-block.warmup {
+    border-left: 3px solid #fbbf24;
+  }
+  .program-block-head {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+  .program-set {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 13px;
+  }
+  .program-set:last-child { border-bottom: none; }
+  .program-set-label {
+    color: var(--text);
+  }
+  .program-set-pace {
+    color: #93c5fd;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    font-weight: 600;
+  }
+  .program-set-rest {
+    color: var(--text-dim);
+    font-size: 11px;
+    grid-column: 1 / -1;
+  }
+  .program-set-notes {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 4px;
+    grid-column: 1 / -1;
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+  .program-pace-tier {
+    display: inline-block;
+    margin-right: 12px;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .program-pace-tier strong {
+    color: #93c5fd;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* Strength logging */
   .ex-card {
     background: var(--surface-2);
@@ -1217,6 +1337,7 @@
 <nav class="tabs">
   <button class="tab active" data-view="log">Log</button>
   <button class="tab" data-view="analyze">Analyze</button>
+  <button class="tab" data-view="program">Program</button>
   <button class="tab" data-view="list">History</button>
   <button class="tab" data-view="settings">Sync</button>
 </nav>
@@ -1328,6 +1449,37 @@
   </section>
 
   <!-- HISTORY VIEW -->
+  <section class="view" id="view-program">
+    <div class="program-header">
+      <div class="row-2">
+        <div>
+          <label for="program-mile">1-mile time (m:ss)</label>
+          <input type="text" id="program-mile" placeholder="6:40" inputmode="text" autocomplete="off">
+        </div>
+        <div>
+          <label for="program-start">Program start date</label>
+          <input type="date" id="program-start">
+        </div>
+      </div>
+      <div class="chart-note" id="program-pace-tiers" style="margin-top:8px"></div>
+    </div>
+
+    <div class="cal-header" id="program-week-nav">
+      <button id="program-prev-week" aria-label="Previous week">‹</button>
+      <div class="cal-title" id="program-week-label">Week 1</div>
+      <button id="program-next-week" aria-label="Next week">›</button>
+    </div>
+
+    <div id="program-day-tabs" class="cal-filters" style="margin-bottom:14px"></div>
+
+    <div id="program-session"></div>
+
+    <div class="empty-state" id="program-empty" style="display:none">
+      <div class="icon">🏃</div>
+      <div id="program-empty-msg">Loading program…</div>
+    </div>
+  </section>
+
   <section class="view" id="view-list">
     <div id="sync-banner" class="sync-banner" style="display:none"></div>
     <div class="log-mode-toggle">
@@ -1576,7 +1728,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-27';
+const APP_VERSION = '2026-04-21-28';
 
 // ============================================================
 // IndexedDB setup
@@ -2335,6 +2487,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.view === 'settings') renderSettings();
     if (tab.dataset.view === 'analyze') renderAnalyze();
     if (tab.dataset.view === 'log') loadStrengthLastTimeCache();
+    if (tab.dataset.view === 'program') renderProgram();
   });
 });
 
@@ -5314,6 +5467,322 @@ async function enrichSessionWithWhoop(session) {
 // The chart overlays these as a dashed reference line starting from the
 // most recent actual reading.
 
+// ============================================================
+// HWPO Run program viewer
+// ============================================================
+// Loads a static program.json from the user's data repo containing the full
+// 53-week HWPO Run programming. Renders the current week (computed from a
+// user-configurable start date) with paces scaled to the user's 1-mile time.
+//
+// Pace math:
+//   ratio = user_mile_seconds / baseline_mile_seconds  (baseline = 400s = 6:40)
+//   pace_seconds = base_seconds * ratio  [+ goal_offset_per_mile]
+//
+// Storage:
+//   - program data cached in config store under 'program_data'
+//   - mile time and start date in config store under 'program_mile_seconds'
+//     and 'program_start_date'
+//
+// Pace tiers shown at the top of the tab: 5K race, VO2 max, threshold, tempo.
+
+let programData = null;
+let programCurrentWeek = 1;
+let programCurrentDayIdx = 0;
+
+const PROGRAM_DEFAULT_MILE_SECONDS = 401; // 6:41 — user's current mile time
+
+function programParseMileTime(s) {
+  // Accept "6:41" or "6.41" or "401" (already seconds). Return seconds or null.
+  if (s == null) return null;
+  s = String(s).trim();
+  if (!s) return null;
+  if (s.includes(':')) {
+    const [m, sec] = s.split(':');
+    const mi = parseInt(m, 10);
+    const si = parseInt(sec, 10);
+    if (isNaN(mi) || isNaN(si)) return null;
+    return mi * 60 + si;
+  }
+  const n = parseFloat(s);
+  if (isNaN(n)) return null;
+  // Plain number under 30 → assume "minutes" (treat as m.ss-style? unlikely)
+  // Plain number above 100 → assume seconds
+  if (n >= 100) return Math.round(n);
+  return null;
+}
+
+function programFormatPace(seconds, suffix = '/mile') {
+  // Returns "m:ss/mile" or "—" if invalid
+  if (seconds == null || isNaN(seconds) || seconds <= 0) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}${suffix}`;
+}
+
+function programFormatDuration(seconds) {
+  if (seconds == null) return '';
+  const total = Math.round(seconds);
+  if (total < 60) return `${total}s`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return s > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${m}:00`;
+}
+
+// Fetch program.json from the data repo (or local cache if present).
+async function loadProgramData() {
+  // First try cache for instant render
+  const cached = await getConfig('program_data');
+  if (cached) programData = cached;
+
+  // Then try to refresh from GitHub (best-effort)
+  if (ghConfig) {
+    try {
+      const url = `https://raw.githubusercontent.com/${ghConfig.owner}/${ghConfig.repo}/main/program.json`;
+      const headers = ghConfig.token ? { Authorization: `Bearer ${ghConfig.token}` } : {};
+      const res = await fetch(url, { headers, cache: 'no-cache' });
+      if (res.ok) {
+        const data = await res.json();
+        programData = data;
+        await setConfig('program_data', data);
+      }
+    } catch (e) {
+      console.warn('[program] fetch failed', e);
+    }
+  }
+  return programData;
+}
+
+// Compute pace seconds for a given set, factoring in user's mile time.
+// Returns null if no pace info on the set.
+function programPaceForSet(set, mileSeconds) {
+  if (!programData || mileSeconds == null) return null;
+  const ratio = mileSeconds / programData.baseline_mile_seconds;
+
+  // 1) Explicit pace_mile_s provided in CSV (rare)
+  if (set.pace_mile_s != null) {
+    if (set.pace_mile_high_s != null) {
+      return {
+        low: set.pace_mile_s * ratio,
+        high: set.pace_mile_high_s * ratio,
+      };
+    }
+    return { value: set.pace_mile_s * ratio };
+  }
+
+  // 2) Threshold percentage band — pct of threshold (441s baseline mile pace)
+  if (set.pct_threshold_low != null) {
+    const tBase = programData.pace_tiers.threshold || 441;
+    // % of threshold means a fraction of pace at threshold.
+    // E.g. 110% threshold = pace is 1.10× threshold pace? In running, % of LT is
+    // typically expressed as "% of threshold pace" where higher % = faster.
+    // The CSV's Pct_Threshold values pair with a pace, so the simplest path is
+    // to derive: pace_s = threshold_base / (pct/100) × ratio.
+    const lo = tBase / (set.pct_threshold_high / 100) * ratio; // higher % = faster
+    const hi = tBase / (set.pct_threshold_low / 100) * ratio;
+    return { low: lo, high: hi };
+  }
+
+  // 3) Goal pace (5k / 10k / 20k) with optional offset per mile
+  if (set.goal_distance_km != null) {
+    const baselines = programData.goal_pace_baselines_per_mile || {};
+    const base = baselines[String(set.goal_distance_km)] || baselines[String(Math.round(set.goal_distance_km))];
+    if (base != null) {
+      const offset = set.goal_offset_s_per_mile || 0;
+      return { value: base * ratio + offset };
+    }
+  }
+
+  // 4) Intensity-based qualitative paces (Easy/Moderate/Hard/Recovery/Zone 2/Strides etc.)
+  // No prescribed numeric pace — return null and let UI show duration only.
+  return null;
+}
+
+function programFormatSetPace(pace) {
+  if (!pace) return '';
+  if (pace.value != null) return programFormatPace(pace.value);
+  if (pace.low != null && pace.high != null) {
+    return `${programFormatPace(pace.low, '')}–${programFormatPace(pace.high, '/mile')}`;
+  }
+  return '';
+}
+
+// Compute current week from start date and today.
+function programComputeCurrentWeek(startDateIso) {
+  if (!startDateIso || !programData) return 1;
+  const start = new Date(startDateIso + 'T00:00:00Z');
+  const today = new Date(todayIso() + 'T00:00:00Z');
+  const days = Math.floor((today - start) / 86400000);
+  const week = Math.floor(days / 7) + 1;
+  if (week < 1) return 1;
+  if (week > programData.weeks.length) return programData.weeks.length;
+  return week;
+}
+
+async function renderProgram() {
+  const empty = document.getElementById('program-empty');
+  const emptyMsg = document.getElementById('program-empty-msg');
+  const session = document.getElementById('program-session');
+
+  // Ensure program data loaded
+  if (!programData) {
+    empty.style.display = 'block';
+    emptyMsg.textContent = 'Loading program…';
+    session.innerHTML = '';
+    await loadProgramData();
+    if (!programData) {
+      emptyMsg.textContent = 'No program data available. Make sure program.json is in your data repo.';
+      return;
+    }
+  }
+  empty.style.display = 'none';
+
+  // Read mile time and start date from config (or defaults)
+  let mileSeconds = await getConfig('program_mile_seconds');
+  if (mileSeconds == null) mileSeconds = PROGRAM_DEFAULT_MILE_SECONDS;
+  let startDate = await getConfig('program_start_date');
+  if (!startDate) startDate = todayIso();
+
+  // Populate top inputs
+  const mileEl = document.getElementById('program-mile');
+  const startEl = document.getElementById('program-start');
+  if (mileEl && !mileEl.dataset.bound) {
+    const m = Math.floor(mileSeconds / 60);
+    const s = Math.round(mileSeconds % 60);
+    mileEl.value = `${m}:${String(s).padStart(2, '0')}`;
+    mileEl.dataset.bound = '1';
+    mileEl.addEventListener('change', async () => {
+      const parsed = programParseMileTime(mileEl.value);
+      if (parsed != null && parsed > 60 && parsed < 1800) {
+        await setConfig('program_mile_seconds', parsed);
+        renderProgram();
+      } else {
+        toast('Enter a valid mile time like 6:41', true);
+      }
+    });
+  }
+  if (startEl && !startEl.dataset.bound) {
+    startEl.value = startDate;
+    startEl.dataset.bound = '1';
+    startEl.addEventListener('change', async () => {
+      if (startEl.value) {
+        await setConfig('program_start_date', startEl.value);
+        // Reset to current week relative to new start
+        programCurrentWeek = programComputeCurrentWeek(startEl.value);
+        programCurrentDayIdx = 0;
+        renderProgram();
+      }
+    });
+  }
+
+  // Initialize current week if needed (only on first render)
+  if (programCurrentWeek === 1 && !window._programWeekInitialized) {
+    programCurrentWeek = programComputeCurrentWeek(startDate);
+    window._programWeekInitialized = true;
+  }
+
+  // Pace tiers display
+  const tiers = programData.pace_tiers || {};
+  const tiersEl = document.getElementById('program-pace-tiers');
+  const ratio = mileSeconds / programData.baseline_mile_seconds;
+  const tiersHtml = [
+    ['5K', tiers['5K_race']],
+    ['VO2', tiers['VO2_max']],
+    ['Thresh', tiers['threshold']],
+    ['Tempo', tiers['tempo']],
+  ].filter(([_, v]) => v != null).map(([label, base]) =>
+    `<span class="program-pace-tier">${label}: <strong>${programFormatPace(base * ratio)}</strong></span>`
+  ).join('');
+  tiersEl.innerHTML = tiersHtml;
+
+  // Week label + nav
+  const weekObj = programData.weeks.find(w => w.week === programCurrentWeek)
+    || programData.weeks[0];
+  document.getElementById('program-week-label').textContent =
+    `Week ${weekObj.week} of ${programData.weeks.length}`;
+  document.getElementById('program-prev-week').disabled = (weekObj.week === 1);
+  document.getElementById('program-next-week').disabled = (weekObj.week === programData.weeks.length);
+
+  // Day tabs (only days with sessions)
+  const dayTabs = document.getElementById('program-day-tabs');
+  if (programCurrentDayIdx >= weekObj.days.length) programCurrentDayIdx = 0;
+  dayTabs.innerHTML = weekObj.days.map((d, i) =>
+    `<button type="button" class="program-day-tab ${i === programCurrentDayIdx ? 'active' : ''}" data-idx="${i}">${(d.dow || '').slice(0, 3)}</button>`
+  ).join('');
+  dayTabs.querySelectorAll('.program-day-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      programCurrentDayIdx = parseInt(btn.dataset.idx, 10);
+      renderProgram();
+    });
+  });
+
+  // Render the selected day's session
+  const day = weekObj.days[programCurrentDayIdx];
+  if (!day) {
+    session.innerHTML = '<div class="chart-note">No sessions in this week.</div>';
+    return;
+  }
+
+  let html = `
+    <div class="program-session-header">
+      <h3>${day.dow}</h3>
+      <span class="program-session-type">${day.session_type || ''}</span>
+    </div>
+  `;
+
+  for (const block of day.blocks) {
+    const wuClass = block.is_warmup ? 'warmup' : '';
+    const head = block.is_warmup
+      ? 'Warm-up'
+      : `Block ${block.block}${block.sets.length > 1 ? ` (${block.sets.length} reps)` : ''}`;
+    html += `<div class="program-block ${wuClass}">`;
+    html += `<div class="program-block-head">${head}</div>`;
+    for (const set of block.sets) {
+      const pace = programPaceForSet(set, mileSeconds);
+      const paceTxt = programFormatSetPace(pace);
+      // Build the left-hand label: distance/duration + intensity
+      let lhs = '';
+      if (set.distance_m != null) {
+        lhs += set.distance_m >= 1000
+          ? `${(set.distance_m / 1000).toFixed(set.distance_m % 1000 === 0 ? 0 : 2)} km`
+          : `${set.distance_m} m`;
+      } else if (set.duration_s != null) {
+        lhs += programFormatDuration(set.duration_s);
+      }
+      if (set.intensity) lhs += ` · ${set.intensity}`;
+
+      html += `<div class="program-set">
+        <div class="program-set-label">${lhs}</div>
+        <div class="program-set-pace">${paceTxt}</div>`;
+      if (set.rest_s != null) {
+        html += `<div class="program-set-rest">Rest ${programFormatDuration(set.rest_s)}</div>`;
+      }
+      if (set.notes) {
+        html += `<div class="program-set-notes">${set.notes.replace(/-----/g, '').trim()}</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  session.innerHTML = html;
+}
+
+document.getElementById('program-prev-week').addEventListener('click', () => {
+  if (programCurrentWeek > 1) {
+    programCurrentWeek--;
+    programCurrentDayIdx = 0;
+    renderProgram();
+  }
+});
+document.getElementById('program-next-week').addEventListener('click', () => {
+  if (programData && programCurrentWeek < programData.weeks.length) {
+    programCurrentWeek++;
+    programCurrentDayIdx = 0;
+    renderProgram();
+  }
+});
+
+
 const VO2_GOALS = [
   { date: '2026-05-15', value: 55.5, label: 'May 2026: 55–56' },
   { date: '2026-09-15', value: 57,   label: 'Aug–Oct 2026: 57' },
@@ -5821,6 +6290,8 @@ async function updateCount() {
     // Pre-warm the strength last-time cache so the first exercise card on the
     // Log tab can show "last time" data without waiting for an explicit fetch.
     loadStrengthLastTimeCache();
+    // Pre-warm the HWPO Run program data (cached + GitHub refresh).
+    loadProgramData().catch(e => console.warn('[program preload]', e));
     // Apply the log mode that was restored from sessionStorage above. This
     // updates button visuals and form visibility to match the persisted choice.
     setLogMode(currentLogMode, { skipPersist: true });
