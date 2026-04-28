@@ -1545,7 +1545,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-25';
+const APP_VERSION = '2026-04-21-26';
 
 // ============================================================
 // IndexedDB setup
@@ -3264,6 +3264,11 @@ modalEdit.addEventListener('click', async () => {
   const id = currentModalId;
   modalBg.classList.remove('show');
   await loadSessionIntoForm(id);
+  // Switch to the Log tab so the user sees the populated form. Without this,
+  // the form fills in the background but the visible tab stays on History,
+  // forcing the user to manually tap Log.
+  const logTab = document.querySelector('.tab[data-view="log"]');
+  if (logTab) logTab.click();
 });
 
 async function openModal(id) {
