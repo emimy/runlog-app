@@ -198,6 +198,36 @@
     border-color: var(--accent);
   }
 
+  /* Top-level Log mode toggle: Run vs Workout */
+  .log-mode-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .log-mode-btn {
+    padding: 14px 8px;
+    background: var(--surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .log-mode-btn.active[data-mode="run"] {
+    background: rgba(74, 222, 128, 0.15);
+    color: #86efac;
+    border-color: rgba(74, 222, 128, 0.5);
+  }
+  .log-mode-btn.active[data-mode="workout"] {
+    background: rgba(96, 165, 250, 0.15);
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.5);
+  }
+
   .row-3 {
     display: grid;
     grid-template-columns: 1fr 1fr 1.3fr;
@@ -1144,7 +1174,12 @@
   </div>
   <!-- LOG VIEW -->
   <section class="view active" id="view-log">
-    <div class="field">
+    <div class="log-mode-toggle">
+      <button type="button" class="log-mode-btn active" data-mode="run">Log Run</button>
+      <button type="button" class="log-mode-btn" data-mode="workout">Log Workout</button>
+    </div>
+
+    <div class="field" id="session-type-wrap">
       <label for="session-type">Session Type</label>
       <select id="session-type">
         <option value="4x4">4×4 intervals</option>
@@ -1152,7 +1187,6 @@
         <option value="hwpo_intervals">HWPO intervals</option>
         <option value="gps_outdoor">Outdoor GPS</option>
         <option value="long_run">Long run</option>
-        <option value="strength">Strength</option>
         <option value="other">Other</option>
       </select>
     </div>
@@ -1484,7 +1518,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-23';
+const APP_VERSION = '2026-04-21-24';
 
 // ============================================================
 // IndexedDB setup
@@ -2281,29 +2315,64 @@ sessionType.addEventListener('change', () => {
     if (sessionType.value === '4x4') assDist.value = '5';
     else if (sessionType.value === 'hwpo_intervals') assDist.value = '4';
   }
-  // Switch the form between running fields and strength fields based on type.
-  applySessionTypeMode();
 });
 
-// Show / hide running vs strength form sections based on the selected
-// session type. Strength gets its own block (exercises list); running types
-// keep the equipment picker and distance/duration fields.
+// Top-level log mode: 'run' shows run dropdown + equipment picker + run fields;
+// 'workout' hides those and shows the strength form. The setting persists in
+// sessionStorage so reloads keep the user's last choice. Editing a session
+// flips the mode automatically based on the session type.
+let currentLogMode = 'run';
+
+function setLogMode(mode, opts = {}) {
+  if (mode !== 'run' && mode !== 'workout') mode = 'run';
+  currentLogMode = mode;
+  if (!opts.skipPersist) {
+    try { sessionStorage.setItem('log_mode', mode); } catch (e) {}
+  }
+  // Update toggle button visuals
+  document.querySelectorAll('.log-mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  // Apply form visibility
+  applySessionTypeMode();
+}
+
+// Show / hide running vs strength form sections based on currentLogMode.
+// Strength gets its own block (exercises list); running types keep the
+// equipment picker and distance/duration fields.
 function applySessionTypeMode() {
-  const isStrength = sessionType.value === 'strength';
   const equipSection = document.getElementById('equipment-section');
   const strengthFields = document.getElementById('strength-fields');
-  if (isStrength) {
+  const sessionTypeWrap = document.getElementById('session-type-wrap');
+  if (currentLogMode === 'workout') {
+    sessionTypeWrap.style.display = 'none';
     equipSection.style.display = 'none';
     fieldsOutdoor.style.display = 'none';
     fieldsTreadmill.style.display = 'none';
     fieldsAssault.style.display = 'none';
+    otherWrap.style.display = 'none';
     strengthFields.style.display = 'block';
   } else {
+    sessionTypeWrap.style.display = 'block';
     equipSection.style.display = 'block';
     strengthFields.style.display = 'none';
+    otherWrap.style.display = sessionType.value === 'other' ? 'block' : 'none';
     showFieldsForEquipment(currentEquipment);
   }
 }
+
+// Wire mode-toggle buttons
+document.querySelectorAll('.log-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    setLogMode(btn.dataset.mode);
+  });
+});
+
+// Restore last-used mode on page load
+try {
+  const saved = sessionStorage.getItem('log_mode');
+  if (saved === 'workout' || saved === 'run') currentLogMode = saved;
+} catch (e) {}
 
 function showFieldsForEquipment(eq) {
   fieldsOutdoor.style.display = eq === 'outdoor' ? 'block' : 'none';
@@ -2758,7 +2827,8 @@ async function loadSessionIntoForm(id) {
   dateInput.value = s.date;
 
   // Strength sessions take a different code path — load exercises into state
-  // and skip the equipment / distance population.
+  // and skip the equipment / distance population. Flip the log mode so the
+  // form shows the strength UI.
   if (s.type === 'strength') {
     strengthState = (s.exercises || []).map(ex => ({
       name: ex.name || '',
@@ -2771,8 +2841,8 @@ async function loadSessionIntoForm(id) {
     if (strengthState.length === 0) {
       strengthState.push({ name: '', sets: [{ weight: null, reps: null }] });
     }
+    setLogMode('workout', { skipPersist: true });
     renderStrengthForm();
-    applySessionTypeMode();
     // No image preview for strength sessions
     preview.style.display = 'none';
     preview.src = '';
@@ -2783,7 +2853,8 @@ async function loadSessionIntoForm(id) {
     cancelEditBtn.style.display = 'block';
     return;
   }
-  applySessionTypeMode();
+  // Running session: ensure we're in run mode
+  setLogMode('run', { skipPersist: true });
 
   // Resolve equipment (with legacy fallback)
   const eq = s.equipment || (s.treadmill ? 'home_treadmill' : 'outdoor');
@@ -2840,7 +2911,10 @@ async function loadSessionIntoForm(id) {
 saveBtn.addEventListener('click', async () => {
   saveBtn.disabled = true;
   try {
-    const type = sessionType.value;
+    // When in workout mode, the dropdown is hidden and the type is always
+    // 'strength'. Otherwise use the dropdown value. (When editing a strength
+    // session, currentLogMode was already set to 'workout' by loadSessionIntoForm.)
+    const type = currentLogMode === 'workout' ? 'strength' : sessionType.value;
     const isEdit = editingSessionId !== null;
     const existing = isEdit ? await getSession(editingSessionId) : null;
     // When editing, start from the existing session so unknown fields (like _whoopData
@@ -5522,6 +5596,9 @@ async function updateCount() {
     // Pre-warm the strength last-time cache so the first exercise card on the
     // Log tab can show "last time" data without waiting for an explicit fetch.
     loadStrengthLastTimeCache();
+    // Apply the log mode that was restored from sessionStorage above. This
+    // updates button visuals and form visibility to match the persisted choice.
+    setLogMode(currentLogMode, { skipPersist: true });
     checkForUpdate();
     setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
     // Also check whenever the app comes back to foreground
