@@ -944,11 +944,34 @@
     padding: 14px 14px;
     cursor: pointer;
     user-select: none;
+    gap: 10px;
+  }
+  .program-card-check {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 2px;
+  }
+  .program-card-checkbox {
+    width: 20px;
+    height: 20px;
+    accent-color: #4ade80;
+    cursor: pointer;
+    margin: 0;
   }
   .program-card-day {
+    flex: 1;
     font-weight: 600;
     color: var(--text);
     font-size: 15px;
+  }
+  .program-card.done {
+    opacity: 0.6;
+  }
+  .program-card.done .program-card-day {
+    text-decoration: line-through;
+    color: var(--text-dim);
   }
   .program-card-chevron {
     color: var(--text-dim);
@@ -1697,16 +1720,17 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-32';
+const APP_VERSION = '2026-04-21-33';
 
 // ============================================================
 // IndexedDB setup
 // ============================================================
 const DB_NAME = 'runlog-db';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE = 'sessions';
 const CONFIG_STORE = 'config';
 const VO2_STORE = 'vo2max';
+const PROGRAM_COMPLETION_STORE = 'program_completion';
 let db;
 
 function openDB() {
@@ -1725,6 +1749,11 @@ function openDB() {
         // Keyed by date (YYYY-MM-DD); one reading per day max.
         // Value schema: { date, value, createdAt, updatedAt, syncedAt? }
         d.createObjectStore(VO2_STORE, { keyPath: 'date' });
+      }
+      if (!d.objectStoreNames.contains(PROGRAM_COMPLETION_STORE)) {
+        // Keyed by "WEEK-DOW" (e.g. "5-Monday").
+        // Value schema: { key, week, dow, completed, completedAt }
+        d.createObjectStore(PROGRAM_COMPLETION_STORE, { keyPath: 'key' });
       }
     };
     req.onsuccess = () => { db = req.result; resolve(db); };
@@ -1825,6 +1854,35 @@ function getAllVo2() {
 function deleteVo2(date) {
   return new Promise((resolve, reject) => {
     const req = vo2Tx('readwrite').delete(date);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Program completion helpers. Keyed by "WEEK-DOW" string.
+function progCompTx(mode = 'readonly') {
+  return db.transaction(PROGRAM_COMPLETION_STORE, mode).objectStore(PROGRAM_COMPLETION_STORE);
+}
+function progCompKey(week, dow) {
+  return `${week}-${dow}`;
+}
+function putProgComp(entry) {
+  return new Promise((resolve, reject) => {
+    const req = progCompTx('readwrite').put(entry);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+function getAllProgComp() {
+  return new Promise((resolve, reject) => {
+    const req = progCompTx().getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+function deleteProgComp(key) {
+  return new Promise((resolve, reject) => {
+    const req = progCompTx('readwrite').delete(key);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
@@ -5458,6 +5516,7 @@ let programData = null;
 let programCurrentWeek = 1;
 let programOpenDays = new Set();      // dow strings of currently open accordion cards
 let programLastRenderedWeek = null;   // when the rendered week changes, reset openDays
+let programCompletionMap = {};        // { "5-Monday": true, ... } in-memory cache
 
 const PROGRAM_DEFAULT_MILE_SECONDS = 401; // 6:41 — user's current mile time
 const PROGRAM_DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Saturday'];
@@ -5638,13 +5697,25 @@ async function renderProgram() {
     programLastRenderedWeek = weekObj.week;
   }
 
+  // Load completion state once per render (cheap — single getAll)
+  const compEntries = await getAllProgComp();
+  programCompletionMap = {};
+  for (const e of compEntries) {
+    if (e.completed) programCompletionMap[e.key] = true;
+  }
+
   cardsEl.innerHTML = activeDays.map(dow => {
     const isOpen = programOpenDays.has(dow);
     const tokens = daysThisWeek[dow];
     const text = programRenderTokens(tokens, mileSeconds);
+    const compKey = progCompKey(weekObj.week, dow);
+    const isDone = !!programCompletionMap[compKey];
     return `
-      <div class="program-card ${isOpen ? 'open' : ''}" data-dow="${dow}">
+      <div class="program-card ${isOpen ? 'open' : ''} ${isDone ? 'done' : ''}" data-dow="${dow}" data-comp-key="${compKey}">
         <div class="program-card-head">
+          <label class="program-card-check" onclick="event.stopPropagation()">
+            <input type="checkbox" class="program-card-checkbox" data-comp-key="${compKey}" ${isDone ? 'checked' : ''}>
+          </label>
           <span class="program-card-day">${dow}</span>
           <span class="program-card-chevron">▾</span>
         </div>
@@ -5655,9 +5726,11 @@ async function renderProgram() {
     `;
   }).join('');
 
-  // Wire card toggles
+  // Wire card head taps (excluding the checkbox label) to toggle open
   cardsEl.querySelectorAll('.program-card').forEach(card => {
-    card.querySelector('.program-card-head').addEventListener('click', () => {
+    card.querySelector('.program-card-head').addEventListener('click', (e) => {
+      // Don't toggle accordion when tapping the checkbox area
+      if (e.target.closest('.program-card-check')) return;
       const dow = card.dataset.dow;
       if (programOpenDays.has(dow)) {
         programOpenDays.delete(dow);
@@ -5665,6 +5738,40 @@ async function renderProgram() {
         programOpenDays.add(dow);
       }
       card.classList.toggle('open');
+    });
+  });
+
+  // Wire checkbox toggles — persist locally + sync to GitHub in background
+  cardsEl.querySelectorAll('.program-card-checkbox').forEach(cb => {
+    cb.addEventListener('change', async (e) => {
+      e.stopPropagation();
+      const key = cb.dataset.compKey;
+      const card = cb.closest('.program-card');
+      const completed = cb.checked;
+      // Parse week + dow from key
+      const dashIdx = key.indexOf('-');
+      const week = parseInt(key.slice(0, dashIdx), 10);
+      const dow = key.slice(dashIdx + 1);
+      const entry = {
+        key,
+        week,
+        dow,
+        completed,
+        completedAt: completed ? new Date().toISOString() : null,
+      };
+      try {
+        await putProgComp(entry);
+        programCompletionMap[key] = completed;
+        card.classList.toggle('done', completed);
+        // Sync to GitHub best-effort, don't block UI
+        if (ghConfig) {
+          progCompSyncToGh().catch(err => console.warn('[progComp sync]', err));
+        }
+      } catch (err) {
+        console.error('[progComp save]', err);
+        toast('Failed to save', true);
+        cb.checked = !completed; // revert
+      }
     });
   });
 }
@@ -5843,6 +5950,94 @@ async function vo2SyncToGh() {
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
+  }
+}
+
+// GitHub sync of program completion as a single program_completion.json.
+// Stored as an object map { "5-Monday": { completed: true, completedAt: "..." }, ... }
+// for compactness. Local store mirrors this shape (with a 'key' field per entry
+// so IndexedDB can use it as keyPath).
+async function progCompSyncToGh() {
+  if (!ghConfig) return { ok: false, reason: 'no_github_config' };
+  try {
+    const entries = await getAllProgComp();
+    const map = {};
+    for (const e of entries) {
+      if (e.completed) {
+        map[e.key] = {
+          week: e.week,
+          dow: e.dow,
+          completed: true,
+          completedAt: e.completedAt || null,
+        };
+      }
+    }
+    const path = 'program_completion.json';
+    const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${path}`;
+    const existingSha = await ghGetFileSha(path);
+    const body = {
+      message: `update: program completion (${Object.keys(map).length} sessions)`,
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(map, null, 2)))),
+    };
+    if (existingSha) body.sha = existingSha;
+    let res = await fetch(url, {
+      method: 'PUT',
+      headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 409 || res.status === 422) {
+      const fresh = await ghGetFileShaViaTree(path);
+      if (fresh) {
+        body.sha = fresh;
+        res = await fetch(url, {
+          method: 'PUT',
+          headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      }
+    }
+    if (!res.ok) {
+      const err = await res.text();
+      return { ok: false, error: `PUT ${path}: ${res.status} ${err.slice(0, 100)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// Pull program completion from GitHub at startup. Merges into local store
+// without overwriting newer local edits — by completedAt timestamp.
+async function progCompPullFromGh() {
+  if (!ghConfig) return;
+  try {
+    const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/program_completion.json`;
+    const headers = { Accept: 'application/vnd.github.raw' };
+    if (ghConfig.token) headers.Authorization = `Bearer ${ghConfig.token}`;
+    const res = await fetch(url, { headers, cache: 'no-cache' });
+    if (!res.ok) return; // 404 fine — file may not exist yet
+    const map = await res.json();
+    for (const [key, entry] of Object.entries(map || {})) {
+      // Always trust remote if we have no local entry; otherwise keep newer
+      const existing = await new Promise((resolve, reject) => {
+        const req = progCompTx().get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+      const remoteAt = entry.completedAt || '';
+      const localAt = existing?.completedAt || '';
+      if (!existing || remoteAt > localAt) {
+        await putProgComp({
+          key,
+          week: entry.week,
+          dow: entry.dow,
+          completed: !!entry.completed,
+          completedAt: entry.completedAt || null,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('[progComp pull]', e);
   }
 }
 
@@ -6199,6 +6394,8 @@ async function updateCount() {
     loadStrengthLastTimeCache();
     // Pre-warm the HWPO Run program data (cached + GitHub refresh).
     loadProgramData().catch(e => console.warn('[program preload]', e));
+    // Pull completion state from GitHub so multi-device usage stays in sync.
+    progCompPullFromGh().catch(e => console.warn('[progComp pull]', e));
     // Apply the log mode that was restored from sessionStorage above. This
     // updates button visuals and form visibility to match the persisted choice.
     setLogMode(currentLogMode, { skipPersist: true });
