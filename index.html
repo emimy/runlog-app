@@ -1697,7 +1697,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-31';
+const APP_VERSION = '2026-04-21-32';
 
 // ============================================================
 // IndexedDB setup
@@ -5632,11 +5632,9 @@ async function renderProgram() {
   const dayOrder = programData.day_order || PROGRAM_DAY_ORDER;
   const activeDays = dayOrder.filter(d => daysThisWeek[d]);
 
-  // If we just changed weeks, auto-open the first day. We track this by
-  // comparing weekObj.week to the last-rendered week.
+  // If we just changed weeks, reset card states (everything collapsed by default).
   if (programLastRenderedWeek !== weekObj.week) {
     programOpenDays = new Set();
-    if (activeDays.length > 0) programOpenDays.add(activeDays[0]);
     programLastRenderedWeek = weekObj.week;
   }
 
