@@ -1017,6 +1017,157 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Pace calculator */
+  .pace-calc {
+    margin-top: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .pace-calc-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .pace-calc-title {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 15px;
+  }
+  .pace-calc-chevron {
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1;
+    transition: transform 0.18s ease;
+  }
+  .pace-calc.open .pace-calc-chevron {
+    transform: rotate(180deg);
+  }
+  .pace-calc-body {
+    display: none;
+    padding: 0 14px 14px 14px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  .pace-calc.open .pace-calc-body {
+    display: block;
+  }
+  .pace-calc-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .pace-calc-inputs label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .pace-calc-inputs input {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+  }
+  .pace-calc-summary {
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .pace-calc-summary strong {
+    color: #93c5fd;
+    font-variant-numeric: tabular-nums;
+  }
+  .pace-calc-row {
+    background: var(--surface-2);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    overflow: hidden;
+  }
+  .pace-calc-row-head {
+    display: grid;
+    grid-template-columns: 70px 1fr 70px 18px;
+    gap: 8px;
+    align-items: center;
+    padding: 10px 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .pace-calc-row-label {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .pace-calc-row-pace {
+    color: #93c5fd;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: right;
+  }
+  .pace-calc-row-time {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    text-align: right;
+  }
+  .pace-calc-row-chevron {
+    color: var(--text-dim);
+    font-size: 11px;
+    transition: transform 0.18s ease;
+    line-height: 1;
+    text-align: right;
+  }
+  .pace-calc-row.open .pace-calc-row-chevron {
+    transform: rotate(180deg);
+  }
+  .pace-calc-row-detail {
+    display: none;
+    padding: 0 12px 10px 12px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .pace-calc-row.open .pace-calc-row-detail {
+    display: block;
+    padding-top: 8px;
+  }
+  .pace-calc-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px 12px;
+    font-size: 11px;
+  }
+  .pace-calc-detail-grid > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pace-calc-detail-grid .lbl {
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 9px;
+  }
+  .pace-calc-detail-grid .val {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
   /* Strength logging */
   .ex-card {
     background: var(--surface-2);
@@ -1470,6 +1621,27 @@
       <div class="icon">🏃</div>
       <div id="program-empty-msg">Loading program…</div>
     </div>
+
+    <div id="pace-calc-section" class="pace-calc">
+      <div class="pace-calc-head" id="pace-calc-toggle">
+        <span class="pace-calc-title">Pace Calculator</span>
+        <span class="pace-calc-chevron">▾</span>
+      </div>
+      <div class="pace-calc-body">
+        <div class="pace-calc-inputs">
+          <div>
+            <label for="pace-test-km">Test distance (km)</label>
+            <input type="text" id="pace-test-km" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="1.6">
+          </div>
+          <div>
+            <label for="pace-test-time">Test time (m:ss or h:mm:ss)</label>
+            <input type="text" id="pace-test-time" placeholder="6:41" autocomplete="off">
+          </div>
+        </div>
+        <div class="pace-calc-summary" id="pace-calc-summary"></div>
+        <div id="pace-calc-rows"></div>
+      </div>
+    </div>
   </section>
 
   <section class="view" id="view-list">
@@ -1720,7 +1892,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-33';
+const APP_VERSION = '2026-04-21-34';
 
 // ============================================================
 // IndexedDB setup
@@ -2514,7 +2686,10 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.view === 'settings') renderSettings();
     if (tab.dataset.view === 'analyze') renderAnalyze();
     if (tab.dataset.view === 'log') loadStrengthLastTimeCache();
-    if (tab.dataset.view === 'program') renderProgram();
+    if (tab.dataset.view === 'program') {
+      renderProgram();
+      programInitPaceCalcSection();
+    }
   });
 });
 
@@ -5795,6 +5970,191 @@ document.getElementById('program-next-week').addEventListener('click', () => {
     renderProgram();
   }
 });
+
+// ============================================================
+// Pace Calculator
+// ============================================================
+// Mirrors the test.xlsx logic. From a single test result (distance + time),
+// compute VMA (max aerobic speed), VO2max (Léger), and predicted paces for
+// a series of events. Each event row has a fixed %VMA factor. Per-row
+// derivations: speed = VMA × %, total time = distance / speed,
+// pace per km = 3600/speed_kmh, 400m = pace_km × 0.4, 200m = pace_km × 0.2,
+// mile pace = pace_km × 1.609.
+//
+// Test inputs persist in the config store under
+//   pace_calc_test_km, pace_calc_test_seconds.
+// Calculator open/closed state is local-only (sessionStorage).
+
+const PACE_EVENTS = [
+  { label: 'VMA++',    pct: 1.10, zone: '8',     pctLT: 1.25, distanceM:   400 },
+  { label: 'VMA+',     pct: 1.05, zone: '7',     pctLT: 1.20, distanceM:   800 },
+  { label: 'VMA',      pct: 1.00, zone: '6',     pctLT: 1.15, distanceM:  1500 },
+  { label: '3k',       pct: 0.95, zone: '5+',    pctLT: 1.10, distanceM:  3000 },
+  { label: '5k',       pct: 0.90, zone: '5',     pctLT: 1.05, distanceM:  5000 },
+  { label: '10k',      pct: 0.85, zone: '4',     pctLT: 1.00, distanceM: 10000 },
+  { label: '15k',      pct: 0.81, zone: '4',     pctLT: 0.95, distanceM: 15000 },
+  { label: '21k',      pct: 0.78, zone: '3',     pctLT: 0.92, distanceM: 21100 },
+  { label: '70.3',     pct: 0.75, zone: '2–3',   pctLT: 0.88, distanceM: 21100 },
+  { label: 'Marathon', pct: 0.73, zone: '2–3',   pctLT: 0.85, distanceM: 42200 },
+  { label: 'IronMan',  pct: 0.68, zone: '2–3',   pctLT: 0.75, distanceM: 42200 },
+];
+
+let paceCalcOpenRows = new Set();
+
+function paceCalcParseTime(s) {
+  // Accepts "m:ss" or "h:mm:ss". Returns total seconds, or null.
+  if (s == null) return null;
+  s = String(s).trim();
+  if (!s) return null;
+  const parts = s.split(':');
+  if (parts.length === 2) {
+    const m = parseInt(parts[0], 10);
+    const sec = parseFloat(parts[1].replace(',', '.'));
+    if (isNaN(m) || isNaN(sec)) return null;
+    return m * 60 + sec;
+  }
+  if (parts.length === 3) {
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    const sec = parseFloat(parts[2].replace(',', '.'));
+    if (isNaN(h) || isNaN(m) || isNaN(sec)) return null;
+    return h * 3600 + m * 60 + sec;
+  }
+  // Plain seconds
+  const n = parseFloat(s.replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+
+function paceCalcFormatMS(seconds) {
+  if (seconds == null || isNaN(seconds) || seconds <= 0) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function paceCalcFormatHMS(seconds) {
+  if (seconds == null || isNaN(seconds) || seconds <= 0) return '—';
+  if (seconds < 3600) return paceCalcFormatMS(seconds);
+  const h = Math.floor(seconds / 3600);
+  const rem = seconds - h * 3600;
+  const m = Math.floor(rem / 60);
+  const s = Math.round(rem % 60);
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+async function renderPaceCalc() {
+  // Load persisted test inputs
+  let testKm = await getConfig('pace_calc_test_km');
+  if (testKm == null) testKm = 1.6;
+  let testSeconds = await getConfig('pace_calc_test_seconds');
+  if (testSeconds == null) testSeconds = 401; // 6:41
+
+  // Bind input fields once
+  const kmEl = document.getElementById('pace-test-km');
+  const timeEl = document.getElementById('pace-test-time');
+  if (kmEl && !kmEl.dataset.bound) {
+    kmEl.value = String(testKm);
+    kmEl.dataset.bound = '1';
+    kmEl.addEventListener('change', async () => {
+      const n = parseFloat((kmEl.value || '').replace(',', '.'));
+      if (!isNaN(n) && n > 0 && n < 50) {
+        await setConfig('pace_calc_test_km', n);
+        renderPaceCalc();
+      } else {
+        toast('Enter a valid distance in km', true);
+      }
+    });
+  }
+  if (timeEl && !timeEl.dataset.bound) {
+    const m = Math.floor(testSeconds / 60);
+    const sRem = Math.round(testSeconds % 60);
+    timeEl.value = `${m}:${String(sRem).padStart(2, '0')}`;
+    timeEl.dataset.bound = '1';
+    timeEl.addEventListener('change', async () => {
+      const parsed = paceCalcParseTime(timeEl.value);
+      if (parsed != null && parsed > 30 && parsed < 36000) {
+        await setConfig('pace_calc_test_seconds', parsed);
+        renderPaceCalc();
+      } else {
+        toast('Enter time as m:ss or h:mm:ss', true);
+      }
+    });
+  }
+
+  // Compute VMA and VO2max
+  const vmaKmh = (3600 * testKm) / testSeconds;
+  const vo2max = vmaKmh * 3.5;
+
+  document.getElementById('pace-calc-summary').innerHTML =
+    `VMA: <strong>${vmaKmh.toFixed(2)} km/h</strong>` +
+    ` · VO2max ≈ <strong>${vo2max.toFixed(1)} ml/kg/min</strong>` +
+    ` · Test: ${testKm} km in ${paceCalcFormatHMS(testSeconds)}`;
+
+  // Render rows
+  const rowsEl = document.getElementById('pace-calc-rows');
+  rowsEl.innerHTML = PACE_EVENTS.map(evt => {
+    const speedKmh = vmaKmh * evt.pct;
+    const totalSec = (evt.distanceM / 1000) / speedKmh * 3600;
+    const paceKmSec = 3600 / speedKmh;
+    const pace400Sec = paceKmSec * 0.4;
+    const pace200Sec = paceKmSec * 0.2;
+    const paceMileSec = paceKmSec * 1.609344;
+    const isOpen = paceCalcOpenRows.has(evt.label);
+    return `
+      <div class="pace-calc-row ${isOpen ? 'open' : ''}" data-label="${evt.label}">
+        <div class="pace-calc-row-head">
+          <div class="pace-calc-row-label">${evt.label}</div>
+          <div class="pace-calc-row-pace">${paceCalcFormatMS(paceKmSec)}/km</div>
+          <div class="pace-calc-row-time">${paceCalcFormatHMS(totalSec)}</div>
+          <div class="pace-calc-row-chevron">▾</div>
+        </div>
+        <div class="pace-calc-row-detail">
+          <div class="pace-calc-detail-grid">
+            <div><span class="lbl">% VMA</span><span class="val">${Math.round(evt.pct * 100)}%</span></div>
+            <div><span class="lbl">Speed</span><span class="val">${speedKmh.toFixed(2)} km/h</span></div>
+            <div><span class="lbl">Total time</span><span class="val">${paceCalcFormatHMS(totalSec)}</span></div>
+            <div><span class="lbl">Pace / km</span><span class="val">${paceCalcFormatMS(paceKmSec)}</span></div>
+            <div><span class="lbl">400 m</span><span class="val">${paceCalcFormatMS(pace400Sec)}</span></div>
+            <div><span class="lbl">200 m</span><span class="val">${paceCalcFormatMS(pace200Sec)}</span></div>
+            <div><span class="lbl">Mile pace</span><span class="val">${paceCalcFormatMS(paceMileSec)}</span></div>
+            <div><span class="lbl">% LT</span><span class="val">${evt.pctLT.toFixed(2)}</span></div>
+            <div><span class="lbl">Zone</span><span class="val">${evt.zone}</span></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Wire row toggles
+  rowsEl.querySelectorAll('.pace-calc-row').forEach(row => {
+    row.querySelector('.pace-calc-row-head').addEventListener('click', () => {
+      const label = row.dataset.label;
+      if (paceCalcOpenRows.has(label)) {
+        paceCalcOpenRows.delete(label);
+      } else {
+        paceCalcOpenRows.add(label);
+      }
+      row.classList.toggle('open');
+    });
+  });
+}
+
+// Wire the section open/close
+document.getElementById('pace-calc-toggle').addEventListener('click', () => {
+  const sec = document.getElementById('pace-calc-section');
+  const isOpen = sec.classList.toggle('open');
+  try { sessionStorage.setItem('pace_calc_open', isOpen ? '1' : '0'); } catch (e) {}
+  if (isOpen) renderPaceCalc();
+});
+
+// Restore open state on tab activation
+function programInitPaceCalcSection() {
+  const sec = document.getElementById('pace-calc-section');
+  let open = false;
+  try { open = sessionStorage.getItem('pace_calc_open') === '1'; } catch (e) {}
+  sec.classList.toggle('open', open);
+  if (open) renderPaceCalc();
+}
 
 
 const VO2_GOALS = [
