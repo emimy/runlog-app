@@ -1596,15 +1596,9 @@
   <!-- HISTORY VIEW -->
   <section class="view" id="view-program">
     <div class="program-header">
-      <div class="row-2">
-        <div>
-          <label for="program-mile">1-mile time (m:ss)</label>
-          <input type="text" id="program-mile" placeholder="6:40" inputmode="text" autocomplete="off">
-        </div>
-        <div>
-          <label for="program-start">Program start date</label>
-          <input type="date" id="program-start">
-        </div>
+      <div>
+        <label for="program-mile">1-mile time (m:ss)</label>
+        <input type="text" id="program-mile" placeholder="6:40" inputmode="text" autocomplete="off">
       </div>
       <div class="chart-note" id="program-pace-tiers" style="margin-top:8px"></div>
     </div>
@@ -1892,7 +1886,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-35';
+const APP_VERSION = '2026-04-21-36';
 
 // ============================================================
 // IndexedDB setup
@@ -5796,15 +5790,12 @@ async function renderProgram() {
   }
   empty.style.display = 'none';
 
-  // Read mile time and start date from config
+  // Read mile time from config
   let mileSeconds = await getConfig('program_mile_seconds');
   if (mileSeconds == null) mileSeconds = PROGRAM_DEFAULT_MILE_SECONDS;
-  let startDate = await getConfig('program_start_date');
-  if (!startDate) startDate = todayIso();
 
   // Bind input fields once
   const mileEl = document.getElementById('program-mile');
-  const startEl = document.getElementById('program-start');
   if (mileEl && !mileEl.dataset.bound) {
     const m = Math.floor(mileSeconds / 60);
     const s = Math.round(mileSeconds % 60);
@@ -5819,23 +5810,6 @@ async function renderProgram() {
         toast('Enter a valid mile time like 6:41', true);
       }
     });
-  }
-  if (startEl && !startEl.dataset.bound) {
-    startEl.value = startDate;
-    startEl.dataset.bound = '1';
-    startEl.addEventListener('change', async () => {
-      if (startEl.value) {
-        await setConfig('program_start_date', startEl.value);
-        programCurrentWeek = programComputeCurrentWeek(startEl.value);
-        renderProgram();
-      }
-    });
-  }
-
-  // Initialize current week on first render
-  if (!window._programWeekInitialized) {
-    programCurrentWeek = programComputeCurrentWeek(startDate);
-    window._programWeekInitialized = true;
   }
 
   // Pace tiers display
