@@ -1937,7 +1937,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-42';
+const APP_VERSION = '2026-04-21-43';
 
 // ============================================================
 // IndexedDB setup
@@ -5229,6 +5229,31 @@ function showWeekKmBreakdown(bucket) {
 // Tap a bar to open that session's modal.
 
 let mainLiftSelected = null; // remembered selection across re-renders
+let mainLiftOpenIdx = null;  // index of currently expanded bar (null = none)
+
+// Chart.js plugin (inline) that draws the y-value above each bar in the
+// dataset. Native Chart.js doesn't include this; the alternative is the
+// datalabels plugin via CDN, which seemed like too much for one use.
+const mainLiftBarLabels = {
+  id: 'mainLiftBarLabels',
+  afterDatasetsDraw(chart) {
+    const { ctx, data } = chart;
+    const meta = chart.getDatasetMeta(0);
+    if (!meta || !meta.data) return;
+    ctx.save();
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    meta.data.forEach((bar, i) => {
+      const v = data.datasets[0].data[i];
+      const y = (typeof v === 'object' && v !== null) ? v.y : v;
+      if (y == null) return;
+      ctx.fillText(Math.round(y).toString(), bar.x, bar.y - 4);
+    });
+    ctx.restore();
+  },
+};
 
 async function renderMainLiftVolume() {
   const select = document.getElementById('mainlift-select');
@@ -5245,6 +5270,7 @@ async function renderMainLiftVolume() {
     select.dataset.populated = '1';
     select.addEventListener('change', () => {
       mainLiftSelected = select.value;
+      mainLiftOpenIdx = null;
       renderMainLiftVolume();
     });
   }
@@ -5322,12 +5348,24 @@ async function renderMainLiftVolume() {
         borderWidth: 1,
       }],
     },
+    plugins: [mainLiftBarLabels],
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      // Add some headroom so the bar-top labels don't get clipped at the top
+      layout: { padding: { top: 18 } },
       onClick: (evt, els) => {
         if (!els.length) return;
-        showMainLiftBreakdown(points[els[0].index]);
+        const idx = els[0].index;
+        if (mainLiftOpenIdx === idx) {
+          // Same bar tapped again — collapse
+          mainLiftOpenIdx = null;
+          breakdownEl.style.display = 'none';
+          breakdownEl.innerHTML = '';
+        } else {
+          mainLiftOpenIdx = idx;
+          showMainLiftBreakdown(points[idx]);
+        }
       },
       plugins: {
         legend: { display: false },
