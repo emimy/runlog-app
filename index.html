@@ -878,6 +878,15 @@
     height: 4px;
     border-radius: 50%;
   }
+  .cal-day .cal-strength-marker {
+    position: absolute;
+    bottom: 1px;
+    right: 2px;
+    font-size: 9px;
+    line-height: 1;
+    pointer-events: none;
+    filter: drop-shadow(0 0 2px rgba(0,0,0,0.6));
+  }
 
   /* VO2 list */
   .vo2-row {
@@ -1918,7 +1927,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-39';
+const APP_VERSION = '2026-04-21-40';
 
 // ============================================================
 // IndexedDB setup
@@ -4586,6 +4595,17 @@ function renderCalendar(allSessions) {
           dots.appendChild(d);
         }
         div.appendChild(dots);
+      }
+
+      // Marker for any day that includes a strength session — visible even
+      // when the day is shared with a run (multi-type gradient hides the
+      // type-strength color tint).
+      if (sessions.some(s => s.type === 'strength')) {
+        const marker = document.createElement('span');
+        marker.className = 'cal-strength-marker';
+        marker.textContent = '💪';
+        marker.title = 'Strength session';
+        div.appendChild(marker);
       }
     }
 
