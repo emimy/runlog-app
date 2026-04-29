@@ -1100,8 +1100,8 @@
   }
   .pace-calc-row-head {
     display: grid;
-    grid-template-columns: 70px 1fr 70px 18px;
-    gap: 8px;
+    grid-template-columns: 65px 1fr 50px 65px 14px;
+    gap: 6px;
     align-items: center;
     padding: 10px 12px;
     cursor: pointer;
@@ -1116,6 +1116,13 @@
     color: #93c5fd;
     font-variant-numeric: tabular-nums;
     font-size: 13px;
+    font-weight: 600;
+    text-align: right;
+  }
+  .pace-calc-row-pct {
+    color: #fbbf24;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
     font-weight: 600;
     text-align: right;
   }
@@ -1886,7 +1893,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-36';
+const APP_VERSION = '2026-04-21-37';
 
 // ============================================================
 // IndexedDB setup
@@ -6118,6 +6125,7 @@ async function renderPaceCalc() {
         <div class="pace-calc-row-head">
           <div class="pace-calc-row-label">${evt.label}</div>
           <div class="pace-calc-row-pace">${paceCalcFormatMS(paceKmSec)}/km</div>
+          <div class="pace-calc-row-pct">${Math.round(evt.pctLT * 100)}% LT</div>
           <div class="pace-calc-row-time">${paceCalcFormatHMS(totalSec)}</div>
           <div class="pace-calc-row-chevron">▾</div>
         </div>
