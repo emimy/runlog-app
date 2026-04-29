@@ -930,30 +930,46 @@
     font-family: inherit;
     font-size: 14px;
   }
-  .program-day-tab {
-    padding: 6px 12px;
+  .program-card {
     background: var(--surface);
-    color: var(--text-dim);
     border: 1px solid var(--border);
-    border-radius: 999px;
-    font-size: 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .program-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 14px;
     cursor: pointer;
-    font-family: inherit;
+    user-select: none;
   }
-  .program-day-tab.active {
-    background: rgba(74, 222, 128, 0.15);
-    color: #86efac;
-    border-color: rgba(74, 222, 128, 0.5);
-  }
-  .program-session-header {
-    margin-bottom: 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-  }
-  .program-session-header h3 {
-    margin: 0;
+  .program-card-day {
+    font-weight: 600;
     color: var(--text);
-    font-size: 16px;
+    font-size: 15px;
+  }
+  .program-card-chevron {
+    color: var(--text-dim);
+    font-size: 14px;
+    transition: transform 0.18s ease;
+    line-height: 1;
+  }
+  .program-card.open .program-card-chevron {
+    transform: rotate(180deg);
+  }
+  .program-card-body {
+    display: none;
+    padding: 0 14px 14px 14px;
+  }
+  .program-card.open .program-card-body {
+    display: block;
+  }
+  .program-card.open .program-card-head {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 12px;
   }
   .program-session-text {
     color: var(--text);
@@ -963,10 +979,9 @@
     white-space: pre-wrap;
     word-wrap: break-word;
     margin: 0;
+    background: var(--surface-2);
     padding: 12px;
-    background: var(--surface);
-    border-radius: 8px;
-    border: 1px solid var(--border);
+    border-radius: 6px;
   }
   .program-pace-tier {
     display: inline-block;
@@ -1426,9 +1441,7 @@
       <button id="program-next-week" aria-label="Next week">›</button>
     </div>
 
-    <div id="program-day-tabs" class="cal-filters" style="margin-bottom:14px"></div>
-
-    <div id="program-session"></div>
+    <div id="program-cards"></div>
 
     <div class="empty-state" id="program-empty" style="display:none">
       <div class="icon">🏃</div>
@@ -1684,7 +1697,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-30';
+const APP_VERSION = '2026-04-21-31';
 
 // ============================================================
 // IndexedDB setup
@@ -5443,7 +5456,8 @@ async function enrichSessionWithWhoop(session) {
 
 let programData = null;
 let programCurrentWeek = 1;
-let programCurrentDow = 'Monday'; // selected day-of-week
+let programOpenDays = new Set();      // dow strings of currently open accordion cards
+let programLastRenderedWeek = null;   // when the rendered week changes, reset openDays
 
 const PROGRAM_DEFAULT_MILE_SECONDS = 401; // 6:41 — user's current mile time
 const PROGRAM_DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Saturday'];
@@ -5609,43 +5623,52 @@ async function renderProgram() {
   document.getElementById('program-prev-week').disabled = (weekObj.week === 1);
   document.getElementById('program-next-week').disabled = (weekObj.week === programData.weeks.length);
 
-  // Day tabs — fixed order Mon/Tue/Wed/Thu/Sat. Disabled for days with no
-  // session this week (shown grey, not clickable).
-  const dayTabs = document.getElementById('program-day-tabs');
-  // Pick a default selected day: the first day this week that has a session,
-  // unless the currently selected day still exists, in which case keep it.
+  // Render an accordion of cards — one card per day with a session this week.
+  // Cards toggle independently (multiple can be open at once). The first card
+  // auto-opens whenever the week changes; tracked by programOpenDays as a
+  // Set of dow strings.
+  const cardsEl = document.getElementById('program-cards');
   const daysThisWeek = weekObj.days || {};
   const dayOrder = programData.day_order || PROGRAM_DAY_ORDER;
-  if (!daysThisWeek[programCurrentDow]) {
-    programCurrentDow = dayOrder.find(d => daysThisWeek[d]) || dayOrder[0];
+  const activeDays = dayOrder.filter(d => daysThisWeek[d]);
+
+  // If we just changed weeks, auto-open the first day. We track this by
+  // comparing weekObj.week to the last-rendered week.
+  if (programLastRenderedWeek !== weekObj.week) {
+    programOpenDays = new Set();
+    if (activeDays.length > 0) programOpenDays.add(activeDays[0]);
+    programLastRenderedWeek = weekObj.week;
   }
-  dayTabs.innerHTML = dayOrder.map(dow => {
-    const has = !!daysThisWeek[dow];
-    const active = dow === programCurrentDow ? 'active' : '';
-    const disabled = has ? '' : 'disabled';
-    return `<button type="button" class="program-day-tab ${active}" data-dow="${dow}" ${disabled} style="${has ? '' : 'opacity:0.3;cursor:not-allowed'}">${dow.slice(0, 3)}</button>`;
+
+  cardsEl.innerHTML = activeDays.map(dow => {
+    const isOpen = programOpenDays.has(dow);
+    const tokens = daysThisWeek[dow];
+    const text = programRenderTokens(tokens, mileSeconds);
+    return `
+      <div class="program-card ${isOpen ? 'open' : ''}" data-dow="${dow}">
+        <div class="program-card-head">
+          <span class="program-card-day">${dow}</span>
+          <span class="program-card-chevron">▾</span>
+        </div>
+        <div class="program-card-body">
+          <pre class="program-session-text">${escapeHtml(text)}</pre>
+        </div>
+      </div>
+    `;
   }).join('');
-  dayTabs.querySelectorAll('.program-day-tab[data-dow]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      programCurrentDow = btn.dataset.dow;
-      renderProgram();
+
+  // Wire card toggles
+  cardsEl.querySelectorAll('.program-card').forEach(card => {
+    card.querySelector('.program-card-head').addEventListener('click', () => {
+      const dow = card.dataset.dow;
+      if (programOpenDays.has(dow)) {
+        programOpenDays.delete(dow);
+      } else {
+        programOpenDays.add(dow);
+      }
+      card.classList.toggle('open');
     });
   });
-
-  // Render the selected day as a single preformatted text block.
-  const tokens = daysThisWeek[programCurrentDow];
-  if (!tokens || tokens.length === 0) {
-    session.innerHTML = '<div class="chart-note">No session prescribed for this day.</div>';
-    return;
-  }
-  const text = programRenderTokens(tokens, mileSeconds);
-  session.innerHTML = `
-    <div class="program-session-header">
-      <h3>${programCurrentDow}</h3>
-    </div>
-    <pre class="program-session-text">${escapeHtml(text)}</pre>
-  `;
 }
 
 function escapeHtml(s) {
