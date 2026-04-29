@@ -1927,7 +1927,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-40';
+const APP_VERSION = '2026-04-21-41';
 
 // ============================================================
 // IndexedDB setup
@@ -4565,22 +4565,31 @@ function renderCalendar(allSessions) {
     if (iso === todayIso) div.classList.add('today');
 
     if (sessions.length > 0) {
-      div.classList.add('has-session');
-      // Collect distinct types (in session order)
-      const types = [];
-      for (const s of sessions) {
-        if (!types.includes(s.type)) types.push(s.type);
+      // Strength sessions are signaled by a dumbbell marker (added below) and
+      // intentionally do not contribute to the cell's color. So we compute
+      // colors from the *non-strength* sessions only. If a day is strength-only,
+      // the cell stays plain (no has-session styling, no color).
+      const colorSessions = sessions.filter(s => s.type !== 'strength');
+      const colorTypes = [];
+      for (const s of colorSessions) {
+        if (!colorTypes.includes(s.type)) colorTypes.push(s.type);
       }
-      if (types.length === 1) {
-        const meta = TYPE_COLORS[types[0]] || TYPE_COLORS.other;
-        div.classList.add(meta.css);
-      } else {
-        // Multi-type day: gradient using the first two type colors
-        const c1 = (TYPE_COLORS[types[0]] || TYPE_COLORS.other).hex;
-        const c2 = (TYPE_COLORS[types[1]] || TYPE_COLORS.other).hex;
-        div.classList.add('multi');
-        div.style.background = `linear-gradient(135deg, ${c1}40, ${c2}40)`;
+
+      if (colorTypes.length > 0) {
+        div.classList.add('has-session');
+        if (colorTypes.length === 1) {
+          const meta = TYPE_COLORS[colorTypes[0]] || TYPE_COLORS.other;
+          div.classList.add(meta.css);
+        } else {
+          // Multi-type day (running types only): gradient using first two colors
+          const c1 = (TYPE_COLORS[colorTypes[0]] || TYPE_COLORS.other).hex;
+          const c2 = (TYPE_COLORS[colorTypes[1]] || TYPE_COLORS.other).hex;
+          div.classList.add('multi');
+          div.style.background = `linear-gradient(135deg, ${c1}40, ${c2}40)`;
+        }
       }
+
+      // Tap target: open the most recently created session that day.
       const mostRecent = sessions.reduce((a, b) =>
         (a.createdAt || '') > (b.createdAt || '') ? a : b);
       div.addEventListener('click', () => openModal(mostRecent.id));
@@ -4598,8 +4607,7 @@ function renderCalendar(allSessions) {
       }
 
       // Marker for any day that includes a strength session — visible even
-      // when the day is shared with a run (multi-type gradient hides the
-      // type-strength color tint).
+      // when the day is shared with a run.
       if (sessions.some(s => s.type === 'strength')) {
         const marker = document.createElement('span');
         marker.className = 'cal-strength-marker';
