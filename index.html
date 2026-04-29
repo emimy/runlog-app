@@ -1891,6 +1891,16 @@
       <div id="totalkm-breakdown" class="kpi-detail" style="display:none;margin-top:10px"></div>
     </div>
 
+    <div class="analyze-section" id="analyze-mainlift">
+      <h3>Main lift volume</h3>
+      <div class="field" style="margin-bottom:10px">
+        <select id="mainlift-select"></select>
+      </div>
+      <div class="chart-note" id="mainlift-headline" style="margin-bottom:8px"></div>
+      <div class="chart-wrap"><canvas id="chart-mainlift"></canvas></div>
+      <div id="mainlift-breakdown" class="kpi-detail" style="display:none;margin-top:10px"></div>
+    </div>
+
     <div class="empty-analyze" id="analyze-empty" style="display:none">
       No sessions yet with Whoop data. Log some runs and come back.
     </div>
@@ -1927,7 +1937,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-41';
+const APP_VERSION = '2026-04-21-42';
 
 // ============================================================
 // IndexedDB setup
@@ -4430,7 +4440,9 @@ const TYPE_COLORS = {
   'other':          { label: 'Other',    hex: '#94a3b8', css: 'type-other' },
 };
 // Which types are filter chips (user can show/hide). Everything else always shows.
-const FILTER_TYPES = ['4x4', 'hwpo_intervals', 'long_run', 'z2', 'strength'];
+// Strength sessions are signaled by the dumbbell marker on the calendar; they
+// don't need a filter chip since they don't tint cells.
+const FILTER_TYPES = ['4x4', 'hwpo_intervals', 'long_run', 'z2'];
 
 // Filter state: sessionStorage so it persists across re-renders within a session.
 function getCalendarFilters() {
@@ -4478,6 +4490,7 @@ async function renderAnalyze() {
   renderFourWeekSummary(rows);
   render4x4HrChart(withWhoop);
   renderTotalKm(rows);
+  renderMainLiftVolume();
 }
 
 // ============================================================
@@ -5202,6 +5215,159 @@ function showWeekKmBreakdown(bucket) {
   container.innerHTML = headerHtml + rowsHtml;
   container.style.display = 'block';
   container.querySelectorAll('.kpi-detail-row').forEach(row => {
+    row.addEventListener('click', () => openModal(row.dataset.id));
+  });
+}
+
+// ============================================================
+// Main lift volume chart
+// ============================================================
+// For a selected main lift (Bench / Squat / Deadlift / etc), renders a bar
+// chart with one bar per logged session containing that lift. Y-axis is
+// session volume in kg = Σ(weight × reps) over all sets. X-axis is the
+// session date (time-scale, so gaps between sessions are preserved).
+// Tap a bar to open that session's modal.
+
+let mainLiftSelected = null; // remembered selection across re-renders
+
+async function renderMainLiftVolume() {
+  const select = document.getElementById('mainlift-select');
+  const headline = document.getElementById('mainlift-headline');
+  const ctx = document.getElementById('chart-mainlift').getContext('2d');
+  const breakdownEl = document.getElementById('mainlift-breakdown');
+  if (!select || !ctx) return;
+
+  // Populate the select with main lifts (do this once)
+  if (!select.dataset.populated) {
+    select.innerHTML = MAIN_LIFTS.map(name =>
+      `<option value="${name}">${name}</option>`
+    ).join('');
+    select.dataset.populated = '1';
+    select.addEventListener('change', () => {
+      mainLiftSelected = select.value;
+      renderMainLiftVolume();
+    });
+  }
+  if (!mainLiftSelected) mainLiftSelected = select.value || MAIN_LIFTS[0];
+  if (select.value !== mainLiftSelected) select.value = mainLiftSelected;
+
+  // Pull all strength sessions and extract entries for the selected lift.
+  const all = await getAllSessions();
+  const lower = mainLiftSelected.toLowerCase();
+  const points = [];
+  for (const s of all) {
+    if (s.type !== 'strength' || !Array.isArray(s.exercises)) continue;
+    for (const ex of s.exercises) {
+      if (!ex || !ex.name) continue;
+      if (ex.name.trim().toLowerCase() !== lower) continue;
+      const sets = ex.sets || [];
+      // Volume = Σ (weight × reps) across all sets.
+      // Skip sets that lack either value.
+      let totalKg = 0;
+      let totalReps = 0;
+      const setSummary = [];
+      for (const set of sets) {
+        if (set.weight != null && set.reps != null) {
+          totalKg += set.weight * set.reps;
+          totalReps += set.reps;
+          setSummary.push(`${set.weight}kg × ${set.reps}`);
+        }
+      }
+      if (totalKg <= 0) continue;
+      points.push({
+        sessionId: s.id,
+        date: s.date,
+        totalKg,
+        totalReps,
+        sets: setSummary,
+      });
+    }
+  }
+  // Sort chronologically
+  points.sort((a, b) => a.date.localeCompare(b.date));
+
+  // Tear down previous chart instance
+  if (analyzeCharts.mainLift) {
+    try { analyzeCharts.mainLift.destroy(); } catch (e) {}
+    analyzeCharts.mainLift = null;
+  }
+  breakdownEl.style.display = 'none';
+
+  if (points.length === 0) {
+    headline.textContent = `No ${mainLiftSelected} sessions logged yet.`;
+    analyzeCharts.mainLift = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: [], datasets: [{ data: [] }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
+    });
+    return;
+  }
+
+  // Headline: latest + best
+  const latest = points[points.length - 1];
+  const best = points.reduce((a, b) => b.totalKg > a.totalKg ? b : a);
+  headline.innerHTML =
+    `Latest: <strong>${latest.totalKg.toFixed(0)} kg</strong> (${latest.date}) · ` +
+    `Best: <strong>${best.totalKg.toFixed(0)} kg</strong> (${best.date}) · ` +
+    `${points.length} session${points.length === 1 ? '' : 's'}`;
+
+  analyzeCharts.mainLift = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      datasets: [{
+        label: 'kg',
+        data: points.map(p => ({ x: p.date, y: p.totalKg })),
+        backgroundColor: 'rgba(96, 165, 250, 0.55)',
+        borderColor: '#60a5fa',
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: (evt, els) => {
+        if (!els.length) return;
+        showMainLiftBreakdown(points[els[0].index]);
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (item) => `${item.parsed.y.toFixed(0)} kg`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: 'week', displayFormats: { week: 'MMM d', month: 'MMM yy' } },
+          ticks: { color: '#94a3b8', maxTicksLimit: 8 },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          title: { display: true, text: 'kg (Σ weight × reps)', color: '#94a3b8' },
+          ticks: { color: '#94a3b8' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
+}
+
+function showMainLiftBreakdown(point) {
+  const el = document.getElementById('mainlift-breakdown');
+  el.innerHTML = `
+    <div class="chart-note" style="margin-bottom:6px">
+      ${point.date} · <strong>${point.totalKg.toFixed(0)} kg</strong> total · ${point.totalReps} reps
+    </div>
+    <div class="kpi-detail-row" data-id="${point.sessionId}">
+      <span class="kpi-detail-date">${point.date}</span>
+      <span class="kpi-detail-metric" style="flex:1">${point.sets.join(' · ')}</span>
+    </div>
+  `;
+  el.style.display = 'block';
+  el.querySelectorAll('.kpi-detail-row').forEach(row => {
     row.addEventListener('click', () => openModal(row.dataset.id));
   });
 }
