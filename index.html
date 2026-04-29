@@ -999,12 +999,37 @@
     font-family: inherit;
     font-size: 13px;
     line-height: 1.6;
-    white-space: pre-wrap;
-    word-wrap: break-word;
     margin: 0;
     background: var(--surface-2);
     padding: 12px;
     border-radius: 6px;
+  }
+  .program-line {
+    word-wrap: break-word;
+    min-height: 1.6em;
+    white-space: pre-wrap;
+  }
+  .program-line-blank {
+    height: 0.8em;
+    min-height: 0.8em;
+  }
+  .program-line-pace {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .program-line-pace .program-line-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .program-line-pace .program-line-kmh {
+    flex-shrink: 0;
+    color: #fbbf24;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    white-space: nowrap;
   }
   .program-pace-tier {
     display: inline-block;
@@ -1893,7 +1918,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-37';
+const APP_VERSION = '2026-04-21-38';
 
 // ============================================================
 // IndexedDB setup
@@ -5780,6 +5805,68 @@ function programComputeCurrentWeek(startDateIso) {
   return week;
 }
 
+// Line-based renderer for session text. Splits the rendered text into lines;
+// for any line containing a "% [of] Threshold [Pace]" pattern (single value
+// or N-M range), computes the corresponding km/h and renders the line as a
+// flex row with the prescription on the left and computed km/h on the right.
+// Lines without the pattern render as plain rows preserving spacing.
+//
+// Math: threshold-pace baseline = 441 s/mile (from program.pace_tiers.threshold).
+// At N% threshold the work-pace scales linearly. User's km/h:
+//   baseline_kmh_at_threshold = 1609.344 / 441 * 3.6 / 1000 ≈ 13.13
+// Wait — 1609.344 m / 441 s = 3.65 m/s = 13.13 km/h. Correct.
+//   user_kmh = 13.13 * (pct/100) / (mile_seconds / 400)
+// (Slower mile time → smaller km/h, as expected.)
+function programRenderTokensAsHtml(tokens, mileSeconds) {
+  const text = programRenderTokens(tokens, mileSeconds);
+  const tBase = (programData?.pace_tiers?.threshold) || 441;
+  const baselineKmhAtThresh = 1609.344 / tBase * 3.6 / 1000 * 1000; // = 1609.344/441*3.6 = 13.135
+  const ratio = mileSeconds / (programData?.baseline_mile_seconds || 400);
+
+  function pctToKmh(pct) {
+    const kmh = baselineKmhAtThresh * (pct / 100) / ratio;
+    return kmh.toFixed(1);
+  }
+
+  // Pattern matches:  N%  or  N-M%  followed (possibly) by "of Threshold [Pace]"
+  // Captures: [_, low, high?]. high is undefined for single-value matches.
+  // We require either explicit "Threshold" context OR an "@" prefix in the line
+  // (HWPO convention is "@N%" implies threshold).
+  const PCT_RE = /(\d+)\s*-\s*(\d+)\s*%|(\d+)\s*\+?\s*%/;
+
+  function lineHasThresholdContext(line) {
+    return /threshold/i.test(line) || /^\s*[^\n]*@\s*\d+/.test(line);
+  }
+
+  return text.split('\n').map(line => {
+    const safe = escapeHtml(line);
+    if (!line.trim()) {
+      // Preserve blank-line spacing
+      return `<div class="program-line program-line-blank"></div>`;
+    }
+    if (!lineHasThresholdContext(line)) {
+      return `<div class="program-line">${safe}</div>`;
+    }
+    const m = line.match(PCT_RE);
+    if (!m) {
+      return `<div class="program-line">${safe}</div>`;
+    }
+    let kmhText;
+    if (m[1] !== undefined && m[2] !== undefined) {
+      // Range: m[1]–m[2]
+      kmhText = `${pctToKmh(parseInt(m[1], 10))}–${pctToKmh(parseInt(m[2], 10))} km/h`;
+    } else if (m[3] !== undefined) {
+      kmhText = `${pctToKmh(parseInt(m[3], 10))} km/h`;
+    } else {
+      return `<div class="program-line">${safe}</div>`;
+    }
+    return `<div class="program-line program-line-pace">
+      <span class="program-line-text">${safe}</span>
+      <span class="program-line-kmh">${kmhText}</span>
+    </div>`;
+  }).join('');
+}
+
 async function renderProgram() {
   const empty = document.getElementById('program-empty');
   const emptyMsg = document.getElementById('program-empty-msg');
@@ -5902,7 +5989,7 @@ async function renderProgram() {
   cardsEl.innerHTML = activeDays.map(dow => {
     const isOpen = programOpenDays.has(dow);
     const tokens = daysThisWeek[dow];
-    const text = programRenderTokens(tokens, mileSeconds);
+    const html = programRenderTokensAsHtml(tokens, mileSeconds);
     const compKey = progCompKey(weekObj.week, dow);
     const isDone = !!programCompletionMap[compKey];
     return `
@@ -5915,7 +6002,7 @@ async function renderProgram() {
           <span class="program-card-chevron">▾</span>
         </div>
         <div class="program-card-body">
-          <pre class="program-session-text">${escapeHtml(text)}</pre>
+          <div class="program-session-text">${html}</div>
         </div>
       </div>
     `;
