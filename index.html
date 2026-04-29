@@ -1892,7 +1892,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-34';
+const APP_VERSION = '2026-04-21-35';
 
 // ============================================================
 // IndexedDB setup
@@ -2687,6 +2687,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.view === 'analyze') renderAnalyze();
     if (tab.dataset.view === 'log') loadStrengthLastTimeCache();
     if (tab.dataset.view === 'program') {
+      programAutoJumpPending = true;
       renderProgram();
       programInitPaceCalcSection();
     }
@@ -5692,6 +5693,7 @@ let programCurrentWeek = 1;
 let programOpenDays = new Set();      // dow strings of currently open accordion cards
 let programLastRenderedWeek = null;   // when the rendered week changes, reset openDays
 let programCompletionMap = {};        // { "5-Monday": true, ... } in-memory cache
+let programAutoJumpPending = false;   // set on tab activation; consumed once per render
 
 const PROGRAM_DEFAULT_MILE_SECONDS = 401; // 6:41 — user's current mile time
 const PROGRAM_DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Saturday'];
@@ -5849,6 +5851,42 @@ async function renderProgram() {
   ).join('');
   document.getElementById('program-pace-tiers').innerHTML = tiersHtml;
 
+  // Load completion state up-front so the auto-jump logic below can use it.
+  const compEntries = await getAllProgComp();
+  programCompletionMap = {};
+  for (const e of compEntries) {
+    if (e.completed) programCompletionMap[e.key] = true;
+  }
+
+  // Auto-jump on tab activation: find the earliest (week, dow) pair without
+  // a completion entry and jump there, opening that day's card. The flag is
+  // set in the tab handler and consumed here so within-tab nav (prev/next)
+  // doesn't keep yanking the user back.
+  if (programAutoJumpPending) {
+    programAutoJumpPending = false;
+    const dayOrder = programData.day_order || PROGRAM_DAY_ORDER;
+    let found = null;
+    outer: for (const w of programData.weeks) {
+      const days = w.days || {};
+      for (const dow of dayOrder) {
+        if (!days[dow]) continue;
+        const key = progCompKey(w.week, dow);
+        if (!programCompletionMap[key]) {
+          found = { week: w.week, dow };
+          break outer;
+        }
+      }
+    }
+    if (found) {
+      programCurrentWeek = found.week;
+      // Force a state reset so the auto-open below registers
+      programLastRenderedWeek = null;
+      programOpenDays = new Set([found.dow]);
+    }
+    // If everything is done across the entire program, leave programCurrentWeek
+    // as already initialized (calendar-derived) — no card auto-opens.
+  }
+
   // Week label + nav
   const weekObj = programData.weeks.find(w => w.week === programCurrentWeek)
     || programData.weeks[0];
@@ -5858,25 +5896,26 @@ async function renderProgram() {
   document.getElementById('program-next-week').disabled = (weekObj.week === programData.weeks.length);
 
   // Render an accordion of cards — one card per day with a session this week.
-  // Cards toggle independently (multiple can be open at once). The first card
-  // auto-opens whenever the week changes; tracked by programOpenDays as a
-  // Set of dow strings.
+  // Cards toggle independently (multiple can be open at once). When the week
+  // changes via prev/next nav we reset card state; the auto-jump above may
+  // have pre-populated programOpenDays with the day to open.
   const cardsEl = document.getElementById('program-cards');
   const daysThisWeek = weekObj.days || {};
   const dayOrder = programData.day_order || PROGRAM_DAY_ORDER;
   const activeDays = dayOrder.filter(d => daysThisWeek[d]);
 
-  // If we just changed weeks, reset card states (everything collapsed by default).
-  if (programLastRenderedWeek !== weekObj.week) {
+  // Reset open-state on week change UNLESS the auto-jump just populated it
+  // (in which case programLastRenderedWeek was set to null and the Set already
+  // contains the target dow).
+  if (programLastRenderedWeek !== weekObj.week && programOpenDays.size === 0) {
     programOpenDays = new Set();
     programLastRenderedWeek = weekObj.week;
-  }
-
-  // Load completion state once per render (cheap — single getAll)
-  const compEntries = await getAllProgComp();
-  programCompletionMap = {};
-  for (const e of compEntries) {
-    if (e.completed) programCompletionMap[e.key] = true;
+  } else if (programLastRenderedWeek === null) {
+    programLastRenderedWeek = weekObj.week;
+  } else if (programLastRenderedWeek !== weekObj.week) {
+    // Week changed via nav arrows — reset
+    programOpenDays = new Set();
+    programLastRenderedWeek = weekObj.week;
   }
 
   cardsEl.innerHTML = activeDays.map(dow => {
