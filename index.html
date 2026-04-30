@@ -1040,6 +1040,13 @@
     font-size: 12px;
     white-space: nowrap;
   }
+  .program-inline-kmh {
+    color: #fbbf24;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    white-space: nowrap;
+  }
   .program-pace-tier {
     display: inline-block;
     margin-right: 12px;
@@ -1937,7 +1944,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-43';
+const APP_VERSION = '2026-04-21-44';
 
 // ============================================================
 // IndexedDB setup
@@ -6106,8 +6113,26 @@ function programRenderTokensAsHtml(tokens, mileSeconds) {
     return /threshold/i.test(line) || /^\s*[^\n]*@\s*\d+/.test(line);
   }
 
+  // Convert "m:ss/mile" inside a *line* to "m:ss/mile <span>(X.X km/h)</span>".
+  // Operates on the HTML-escaped string (escapeHtml only touches & < >, so the
+  // plain text "/mile" survives unchanged). Inserts a colored km/h span right
+  // after each match, in the same amber accent as threshold km/h values.
+  function injectMilePaceKmh(safeLine) {
+    return safeLine.replace(/(\d+):(\d{2})\/mile/g, (full, mm, ss) => {
+      const totalSec = parseInt(mm, 10) * 60 + parseInt(ss, 10);
+      if (totalSec <= 0) return full;
+      const kmh = (1609.344 / totalSec * 3.6).toFixed(1);
+      return `${full} <span class="program-inline-kmh">(${kmh} km/h)</span>`;
+    });
+  }
+
   return text.split('\n').map(line => {
-    const safe = escapeHtml(line);
+    let safe = escapeHtml(line);
+    // Inline-substitute any m:ss/mile patterns with their km/h equivalent so
+    // the user can read the prescribed pace in km/h without referencing the
+    // calculator. Done before the threshold-line layout decision so it applies
+    // to both branches.
+    safe = injectMilePaceKmh(safe);
     if (!line.trim()) {
       // Preserve blank-line spacing
       return `<div class="program-line program-line-blank"></div>`;
