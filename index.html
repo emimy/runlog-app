@@ -1598,16 +1598,21 @@
     </div>
 
     <div class="field equipment-detail" id="equipment-fields-treadmill" style="display:none">
-      <div class="row-2">
+      <div class="row-3">
         <div>
-          <label for="distance">Distance (km)</label>
-          <input type="text" id="distance" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="6.50" autocomplete="off">
+          <label for="treadmill-hours">Hours</label>
+          <input type="number" id="treadmill-hours" min="0" inputmode="numeric" placeholder="0">
+        </div>
+        <div>
+          <label for="treadmill-mins">Minutes</label>
+          <input type="number" id="treadmill-mins" min="0" max="59" inputmode="numeric" placeholder="45">
         </div>
         <div>
           <label for="speed">Avg Speed (km/h)</label>
           <input type="text" id="speed" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="8.5" autocomplete="off">
         </div>
       </div>
+      <div id="treadmill-distance-hint" class="speed-hint"></div>
     </div>
 
     <div class="field equipment-detail" id="equipment-fields-assault" style="display:none">
@@ -2753,8 +2758,10 @@ const sessionType = document.getElementById('session-type');
 const otherWrap = document.getElementById('other-wrap');
 const otherDesc = document.getElementById('other-desc');
 const dateInput = document.getElementById('session-date');
-const distanceInput = document.getElementById('distance');
+const treadmillHours = document.getElementById('treadmill-hours');
+const treadmillMins = document.getElementById('treadmill-mins');
 const speedInput = document.getElementById('speed');
+const treadmillDistanceHint = document.getElementById('treadmill-distance-hint');
 const notesInput = document.getElementById('workout-notes');
 const outdoorHours = document.getElementById('outdoor-hours');
 const outdoorMins = document.getElementById('outdoor-mins');
@@ -3294,6 +3301,29 @@ function computeOutdoorSpeed() {
   el.addEventListener('input', computeOutdoorSpeed);
 });
 
+function computeTreadmillDistance() {
+  const h = parseNum(treadmillHours.value) || 0;
+  const m = parseNum(treadmillMins.value) || 0;
+  const sp = parseNum(speedInput.value) || 0;
+  const totalHours = h + m / 60;
+  if (totalHours > 0 && sp > 0) {
+    const dist = sp * totalHours;
+    const paceMinPerKm = 60 / sp;
+    const paceM = Math.floor(paceMinPerKm);
+    const paceS = Math.round((paceMinPerKm - paceM) * 60);
+    treadmillDistanceHint.innerHTML = `Distance: <strong>${dist.toFixed(2)} km</strong> · pace ${paceM}:${String(paceS).padStart(2,'0')}/km`;
+    treadmillDistanceHint.classList.add('show');
+    return dist;
+  } else {
+    treadmillDistanceHint.classList.remove('show');
+    return null;
+  }
+}
+
+[treadmillHours, treadmillMins, speedInput].forEach(el => {
+  el.addEventListener('input', computeTreadmillDistance);
+});
+
 fileDrop.addEventListener('click', () => fileInput.click());
 
 let currentFileBlob = null;
@@ -3368,7 +3398,8 @@ async function loadSessionIntoForm(id) {
   equipmentBtns.forEach(b => b.classList.toggle('active', b.dataset.equipment === eq));
   showFieldsForEquipment(eq);
   // Fields
-  distanceInput.value = '';
+  treadmillHours.value = '';
+  treadmillMins.value = '';
   speedInput.value = '';
   notesInput.value = '';
   outdoorHours.value = '';
@@ -3376,6 +3407,7 @@ async function loadSessionIntoForm(id) {
   outdoorDistance.value = '';
   document.getElementById('assault-distance').value = '';
   outdoorSpeedHint.classList.remove('show');
+  treadmillDistanceHint.classList.remove('show');
   if (eq === 'outdoor') {
     if (s.durationMinutes != null) {
       outdoorHours.value = Math.floor(s.durationMinutes / 60) || '';
@@ -3384,8 +3416,16 @@ async function loadSessionIntoForm(id) {
     if (s.distanceKm != null) outdoorDistance.value = s.distanceKm;
     computeOutdoorSpeed();
   } else if (eq === 'home_treadmill' || eq === 'gym_treadmill') {
-    if (s.distanceKm != null) distanceInput.value = s.distanceKm;
+    let dur = s.durationMinutes;
+    if (dur == null && s.distanceKm != null && s.avgSpeedKmh) {
+      dur = (s.distanceKm / s.avgSpeedKmh) * 60;
+    }
+    if (dur != null) {
+      treadmillHours.value = Math.floor(dur / 60) || '';
+      treadmillMins.value = Math.round(dur - Math.floor(dur / 60) * 60) || '';
+    }
     if (s.avgSpeedKmh != null) speedInput.value = s.avgSpeedKmh;
+    computeTreadmillDistance();
   } else if (eq === 'gym_assault_runner') {
     if (s.distanceKm != null) document.getElementById('assault-distance').value = s.distanceKm;
     if (s.workoutNotes) notesInput.value = s.workoutNotes;
@@ -3477,10 +3517,15 @@ saveBtn.addEventListener('click', async () => {
         session.avgSpeedKmh = Math.round((session.distanceKm / (session.durationMinutes / 60)) * 100) / 100;
       }
     } else if (currentEquipment === 'home_treadmill' || currentEquipment === 'gym_treadmill') {
-      const d = parseNum(distanceInput.value);
+      const h = parseNum(treadmillHours.value) || 0;
+      const m = parseNum(treadmillMins.value) || 0;
+      const totalMin = h * 60 + m;
       const sp = parseNum(speedInput.value);
-      if (d != null) session.distanceKm = d;
+      if (totalMin > 0) session.durationMinutes = totalMin;
       if (sp != null) session.avgSpeedKmh = sp;
+      if (totalMin > 0 && sp != null && sp > 0) {
+        session.distanceKm = Math.round(sp * (totalMin / 60) * 100) / 100;
+      }
     } else if (currentEquipment === 'gym_assault_runner') {
       const ad = parseNum(document.getElementById('assault-distance').value);
       if (ad != null && ad > 0) session.distanceKm = ad;
@@ -3578,7 +3623,8 @@ function resetForm() {
   otherWrap.style.display = 'none';
   otherDesc.value = '';
   dateInput.value = new Date().toISOString().slice(0, 10);
-  distanceInput.value = '';
+  treadmillHours.value = '';
+  treadmillMins.value = '';
   speedInput.value = '';
   notesInput.value = '';
   outdoorHours.value = '';
@@ -3587,6 +3633,8 @@ function resetForm() {
   document.getElementById('assault-distance').value = '';
   outdoorSpeedHint.classList.remove('show');
   outdoorSpeedHint.innerHTML = '';
+  treadmillDistanceHint.classList.remove('show');
+  treadmillDistanceHint.innerHTML = '';
   currentEquipment = 'outdoor';
   equipmentBtns.forEach(b => b.classList.remove('active'));
   equipmentBtns[0].classList.add('active');
