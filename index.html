@@ -1915,16 +1915,18 @@
 
     <div class="analyze-section">
       <h3>Weekly Zone 2</h3>
-      <div class="chart-note" style="margin-bottom:4px">Minutes in Z2, rolling 7-day periods. Each bar = 7 days ending on the labeled date. Target ~180 min.</div>
+      <div class="chart-note" style="margin-bottom:4px">Minutes in Z2, rolling 7-day periods. Each bar = 7 days ending on the labeled date. Target ~180 min. Tap a bar to see the workouts.</div>
       <div class="chart-note" id="note-z2-recent" style="margin-bottom:8px"></div>
       <div class="chart-wrap"><canvas id="chart-weekly-z2-history"></canvas></div>
+      <div id="z2-bar-detail" class="kpi-detail" style="display:none;margin-top:10px"></div>
     </div>
 
     <div class="analyze-section">
       <h3>Weekly Z4+Z5</h3>
-      <div class="chart-note" style="margin-bottom:4px">Minutes in Z4+Z5 (high intensity), rolling 7-day periods. Each bar = 7 days ending on the labeled date.</div>
+      <div class="chart-note" style="margin-bottom:4px">Minutes in Z4+Z5 (high intensity), rolling 7-day periods. Each bar = 7 days ending on the labeled date. Tap a bar to see the workouts.</div>
       <div class="chart-note" id="note-z45-recent" style="margin-bottom:8px"></div>
       <div class="chart-wrap"><canvas id="chart-weekly-z45-history"></canvas></div>
+      <div id="z45-bar-detail" class="kpi-detail" style="display:none;margin-top:10px"></div>
     </div>
 
     <div class="analyze-section">
@@ -5697,11 +5699,16 @@ function renderWeeklyZ2History(rows) {
 
   const labels = periods.map(p => p.end);
   const data = periods.map(p => Math.round(p.minutes));
-  const recentAvg = data.length
-    ? Math.round(data.slice(-4).reduce((s, v) => s + v, 0) / Math.min(4, data.length))
+  const lifetimeAvg = data.length
+    ? Math.round(data.reduce((s, v) => s + v, 0) / data.length)
     : 0;
   document.getElementById('note-z2-recent').textContent =
-    `Last 4 weeks avg: ${recentAvg} min/week.`;
+    `Lifetime average: ${lifetimeAvg} min/week.`;
+
+  // Cache for the bar-click drilldown.
+  z2HistoryPeriods = periods.map(p => ({ start: p.start, end: p.end }));
+  z2HistoryRows = rows;
+  document.getElementById('z2-bar-detail').style.display = 'none';
 
   const ctx = document.getElementById('chart-weekly-z2-history').getContext('2d');
   analyzeCharts.weeklyZ2History = new Chart(ctx, {
@@ -5719,6 +5726,10 @@ function renderWeeklyZ2History(rows) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      onClick: (evt, elements) => {
+        if (!elements || elements.length === 0) return;
+        renderZ2BarDetail(elements[0].index);
+      },
       plugins: { legend: { labels: { color: '#cbd5e1' } } },
       scales: {
         x: {
@@ -5775,11 +5786,16 @@ function renderWeeklyZ45History(rows) {
 
   const labels = periods.map(p => p.end);
   const data = periods.map(p => Math.round(p.minutes));
-  const recentAvg = data.length
-    ? Math.round(data.slice(-4).reduce((s, v) => s + v, 0) / Math.min(4, data.length))
+  const lifetimeAvg = data.length
+    ? Math.round(data.reduce((s, v) => s + v, 0) / data.length)
     : 0;
   document.getElementById('note-z45-recent').textContent =
-    `Last 4 weeks avg: ${recentAvg} min/week.`;
+    `Lifetime average: ${lifetimeAvg} min/week.`;
+
+  // Cache for the bar-click drilldown.
+  z45HistoryPeriods = periods.map(p => ({ start: p.start, end: p.end }));
+  z45HistoryRows = rows;
+  document.getElementById('z45-bar-detail').style.display = 'none';
 
   const ctx = document.getElementById('chart-weekly-z45-history').getContext('2d');
   analyzeCharts.weeklyZ45History = new Chart(ctx, {
@@ -5797,6 +5813,10 @@ function renderWeeklyZ45History(rows) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      onClick: (evt, elements) => {
+        if (!elements || elements.length === 0) return;
+        renderZ45BarDetail(elements[0].index);
+      },
       plugins: { legend: { labels: { color: '#cbd5e1' } } },
       scales: {
         x: {
@@ -5810,6 +5830,99 @@ function renderWeeklyZ45History(rows) {
         },
       },
     },
+  });
+}
+
+// State for bar-click drilldowns. Set inside the render functions above.
+let z2HistoryPeriods = [];
+let z2HistoryRows = [];
+let z45HistoryPeriods = [];
+let z45HistoryRows = [];
+
+const Z_TYPE_CSS = {
+  '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
+  'long_run': 'type-long_run', 'z2': 'type-z2',
+  'gps_outdoor': 'type-z2', 'strength': 'type-other',
+  'other': 'type-other',
+};
+
+function renderZ2BarDetail(idx) {
+  const container = document.getElementById('z2-bar-detail');
+  const period = z2HistoryPeriods[idx];
+  if (!period) return;
+  const sessions = z2HistoryRows
+    .filter(r => r.type === 'z2' && r.mins > 0 && r.date >= period.start && r.date <= period.end)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const header = `<div class="chart-note" style="margin-bottom:6px">
+    Week of ${formatRange(period.start, period.end)} · ${sessions.length} session${sessions.length === 1 ? '' : 's'}
+  </div>`;
+
+  if (sessions.length === 0) {
+    container.innerHTML = header + '<div class="kpi-detail-empty">No Z2 sessions in this week.</div>';
+    container.style.display = 'block';
+    return;
+  }
+
+  const rowsHtml = sessions.map(r => {
+    const meta = SESSION_LABELS[r.type] || SESSION_LABELS.other;
+    const css = Z_TYPE_CSS[r.type] || 'type-other';
+    const parts = [];
+    if (r.distanceKm != null) parts.push(`<span class="metric-dist">${r.distanceKm} km</span>`);
+    if (r.mins) parts.push(`<span class="metric-mins">${Math.round(r.mins)}m</span>`);
+    if (r.avgSpeedKmh != null) parts.push(`<span class="metric-speed">${r.avgSpeedKmh} km/h</span>`);
+    const metric = parts.length ? parts.join('<span class="metric-sep"> · </span>') : '–';
+    return `
+      <div class="kpi-detail-row" data-id="${r.id}">
+        <span class="kpi-detail-date">${r.date}</span>
+        <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
+        <span class="kpi-detail-metric">${metric}</span>
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = header + rowsHtml;
+  container.style.display = 'block';
+  container.querySelectorAll('.kpi-detail-row').forEach(row => {
+    row.addEventListener('click', () => openModal(row.dataset.id));
+  });
+}
+
+function renderZ45BarDetail(idx) {
+  const container = document.getElementById('z45-bar-detail');
+  const period = z45HistoryPeriods[idx];
+  if (!period) return;
+  const sessions = z45HistoryRows
+    .filter(r => r.date >= period.start && r.date <= period.end && ((r.z4 || 0) + (r.z5 || 0)) > 0)
+    .map(r => ({ ...r, z45: (r.z4 || 0) + (r.z5 || 0) }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const header = `<div class="chart-note" style="margin-bottom:6px">
+    Week of ${formatRange(period.start, period.end)} · ${sessions.length} session${sessions.length === 1 ? '' : 's'}
+  </div>`;
+
+  if (sessions.length === 0) {
+    container.innerHTML = header + '<div class="kpi-detail-empty">No high-intensity sessions in this week.</div>';
+    container.style.display = 'block';
+    return;
+  }
+
+  const rowsHtml = sessions.map(r => {
+    const meta = SESSION_LABELS[r.type] || SESSION_LABELS.other;
+    const css = Z_TYPE_CSS[r.type] || 'type-other';
+    return `
+      <div class="kpi-detail-row" data-id="${r.id}">
+        <span class="kpi-detail-date">${r.date}</span>
+        <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
+        <span class="kpi-detail-metric">Z4+Z5 ${r.z45.toFixed(1)}m</span>
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = header + rowsHtml;
+  container.style.display = 'block';
+  container.querySelectorAll('.kpi-detail-row').forEach(row => {
+    row.addEventListener('click', () => openModal(row.dataset.id));
   });
 }
 
