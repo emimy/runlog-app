@@ -1914,20 +1914,17 @@
     </div>
 
     <div class="analyze-section">
-      <div class="cal-header">
-        <button id="wk4-prev" aria-label="Previous 4 weeks">‹</button>
-        <div class="cal-title" id="wk4-label">4-week Summary</div>
-        <button id="wk4-next" aria-label="Next 4 weeks">›</button>
-      </div>
-      <div class="chart-note" id="note-4wk-total" style="margin-top:4px;margin-bottom:8px"></div>
-      <div class="chart-wrap"><canvas id="chart-weekly-combined"></canvas></div>
-    </div>
-
-    <div class="analyze-section">
       <h3>Weekly Zone 2</h3>
       <div class="chart-note" style="margin-bottom:4px">Minutes in Z2, rolling 7-day periods. Each bar = 7 days ending on the labeled date. Target ~180 min.</div>
       <div class="chart-note" id="note-z2-recent" style="margin-bottom:8px"></div>
       <div class="chart-wrap"><canvas id="chart-weekly-z2-history"></canvas></div>
+    </div>
+
+    <div class="analyze-section">
+      <h3>Weekly Z4+Z5</h3>
+      <div class="chart-note" style="margin-bottom:4px">Minutes in Z4+Z5 (high intensity), rolling 7-day periods. Each bar = 7 days ending on the labeled date.</div>
+      <div class="chart-note" id="note-z45-recent" style="margin-bottom:8px"></div>
+      <div class="chart-wrap"><canvas id="chart-weekly-z45-history"></canvas></div>
     </div>
 
     <div class="analyze-section">
@@ -4541,7 +4538,7 @@ function destroyCharts() {
 // Sections are rendered top-to-bottom:
 //   1. Calendar (month picker + per-type coloring + type filters)
 //   2. Last 7 days KPIs (# 4x4, Z4+Z5 min, Z2 run min)
-//   3. 4-week summary (Z4+Z5 bars, Z2 bars)
+//   3. Weekly Z2 + Z4+Z5 history (rolling 7-day buckets, full history)
 //   4. Pace & HR Calibration (GPS scatter, 4x4 max+avg HR)
 
 // --- Type colors & filter chips ---
@@ -4604,8 +4601,8 @@ async function renderAnalyze() {
   document.getElementById('analyze-empty').style.display = 'none';
 
   renderLast7Days(rows);
-  renderFourWeekSummary(rows);
   renderWeeklyZ2History(rows);
+  renderWeeklyZ45History(rows);
   render4x4HrChart(withWhoop);
   renderTotalKm(rows);
   renderMainLiftVolume();
@@ -5662,106 +5659,6 @@ function showMainLiftBreakdown(point) {
 
 
 // ============================================================
-// 4-week summary — windowed, combined Z2 & Z4+Z5 per week
-// ============================================================
-// Anchor is the end date of the most recent week in the window.
-// Window shows 4 consecutive 7-day buckets ending at anchor.
-// Nav by 4 weeks at a time. Cannot scroll past today.
-
-let wk4Anchor = new Date().toISOString().slice(0, 10);
-
-function renderFourWeekSummary(rows) {
-  allRowsCache = rows;
-  const buckets = [];
-  for (let w = 3; w >= 0; w--) {
-    const endIso = isoBack(wk4Anchor, w * 7);
-    const startIso = isoBack(endIso, 6);
-    const in_ = rows.filter(r => r.date >= startIso && r.date <= endIso);
-    const z45 = in_.reduce((s, r) => s + (r.z4 || 0) + (r.z5 || 0), 0);
-    const z2m = in_.filter(r => r.type === 'z2').reduce((s, r) => s + (r.mins || 0), 0);
-    buckets.push({
-      label: formatRange(startIso, endIso),
-      z45: Math.round(z45),
-      z2: Math.round(z2m),
-    });
-  }
-
-  // Label: "4 weeks through 21/4" or windowed range
-  const windowStart = isoBack(wk4Anchor, 27);
-  document.getElementById('wk4-label').textContent = formatRange(windowStart, wk4Anchor);
-
-  // Next button disabled when latest bucket already reaches today
-  document.getElementById('wk4-next').disabled = (wk4Anchor === todayIso());
-
-  // Headline totals
-  const total_z45 = buckets.reduce((s, b) => s + b.z45, 0);
-  const total_z2  = buckets.reduce((s, b) => s + b.z2, 0);
-  document.getElementById('note-4wk-total').textContent =
-    `Totals this window: Z4+Z5 ${total_z45} min, Z2 sessions ${total_z2} min`;
-
-  // Combined grouped bar chart
-  const ctx = document.getElementById('chart-weekly-combined').getContext('2d');
-  analyzeCharts.combined = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: buckets.map(b => b.label),
-      datasets: [
-        {
-          label: 'Z4+Z5 min',
-          data: buckets.map(b => b.z45),
-          backgroundColor: 'rgba(239, 68, 68, 0.6)',
-          borderColor: 'rgba(239, 68, 68, 0.9)',
-          borderWidth: 1,
-        },
-        {
-          label: 'Z2 session min',
-          data: buckets.map(b => b.z2),
-          backgroundColor: 'rgba(74, 222, 128, 0.6)',
-          borderColor: 'rgba(74, 222, 128, 0.9)',
-          borderWidth: 1,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#cbd5e1' } } },
-      scales: {
-        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: {
-          ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' },
-          beginAtZero: true,
-          title: { display: true, text: 'minutes', color: '#94a3b8' },
-        },
-      },
-    },
-  });
-}
-
-document.getElementById('wk4-prev').addEventListener('click', () => {
-  wk4Anchor = isoBack(wk4Anchor, 28);
-  destroyCharts();
-  renderFourWeekSummary(allRowsCache);
-  renderWeeklyZ2History(allRowsCache);
-  // Re-render 4x4 HR chart too since destroyCharts wiped it
-  const withWhoop = allRowsCache.map(normalize).filter(Boolean).filter(r => r.hasWhoop);
-  render4x4HrChart(withWhoop);
-});
-document.getElementById('wk4-next').addEventListener('click', () => {
-  const next = isoForward(wk4Anchor, 28);
-  if (next > todayIso()) {
-    wk4Anchor = todayIso();
-  } else {
-    wk4Anchor = next;
-  }
-  destroyCharts();
-  renderFourWeekSummary(allRowsCache);
-  renderWeeklyZ2History(allRowsCache);
-  const withWhoop = allRowsCache.map(normalize).filter(Boolean).filter(r => r.hasWhoop);
-  render4x4HrChart(withWhoop);
-});
-
-// ============================================================
 // Weekly Zone 2 — full-history rolling 7-day buckets
 // ============================================================
 // Mirrors the Whoop dashboard's "Weekly Zone 2" chart. Walks back from
@@ -5816,6 +5713,84 @@ function renderWeeklyZ2History(rows) {
         data,
         backgroundColor: 'rgba(74, 222, 128, 0.6)',
         borderColor: 'rgba(74, 222, 128, 0.9)',
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#cbd5e1' } } },
+      scales: {
+        x: {
+          ticks: { color: '#94a3b8', maxTicksLimit: 12, font: { size: 10 } },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: '#94a3b8', callback: v => v + ' min' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+// ============================================================
+// Weekly Z4+Z5 — full-history rolling 7-day buckets
+// ============================================================
+// Same shape as the Z2 chart but sums z4+z5 minutes from any session with
+// Whoop zone data, regardless of session type. This is the "real high
+// intensity work" measure across the whole training history.
+function renderWeeklyZ45History(rows) {
+  const today = todayIso();
+  const z45Rows = rows
+    .map(r => ({ date: r.date, mins: (r.z4 || 0) + (r.z5 || 0) }))
+    .filter(r => r.mins > 0);
+
+  let firstDate = today;
+  for (const r of z45Rows) {
+    if (r.date < firstDate) firstDate = r.date;
+  }
+  const spanDays = Math.min(
+    1825,
+    Math.max(7, Math.round((new Date(today + 'T12:00:00') - new Date(firstDate + 'T12:00:00')) / 86400000) + 1)
+  );
+  const numPeriods = Math.max(1, Math.ceil(spanDays / 7));
+
+  const periods = [];
+  for (let i = numPeriods - 1; i >= 0; i--) {
+    const end = isoBack(today, i * 7);
+    const start = isoBack(end, 6);
+    periods.push({ start, end, minutes: 0 });
+  }
+  for (const r of z45Rows) {
+    for (const p of periods) {
+      if (r.date >= p.start && r.date <= p.end) {
+        p.minutes += r.mins;
+        break;
+      }
+    }
+  }
+  while (periods.length && periods[0].minutes === 0) periods.shift();
+
+  const labels = periods.map(p => p.end);
+  const data = periods.map(p => Math.round(p.minutes));
+  const recentAvg = data.length
+    ? Math.round(data.slice(-4).reduce((s, v) => s + v, 0) / Math.min(4, data.length))
+    : 0;
+  document.getElementById('note-z45-recent').textContent =
+    `Last 4 weeks avg: ${recentAvg} min/week.`;
+
+  const ctx = document.getElementById('chart-weekly-z45-history').getContext('2d');
+  analyzeCharts.weeklyZ45History = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Z4+Z5 minutes',
+        data,
+        backgroundColor: 'rgba(239, 68, 68, 0.6)',
+        borderColor: 'rgba(239, 68, 68, 0.9)',
         borderWidth: 1,
       }],
     },
