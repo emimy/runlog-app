@@ -674,6 +674,61 @@
     background: rgba(74, 222, 128, 0.08);
   }
 
+  /* List/Calendar toggle inside By-type drilldown */
+  .bt-view-toggle {
+    display: inline-flex;
+    gap: 0;
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+  .bt-view-btn {
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    background: transparent;
+    color: var(--text-dim);
+    border: 0;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    font-family: inherit;
+  }
+  .bt-view-btn.active {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+  }
+
+  /* Mini-calendar inside By-type drilldown */
+  .bt-cal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .bt-cal-header button {
+    padding: 2px 10px;
+    font-size: 14px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .bt-cal-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .bt-cal-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
   /* By type — 2x2 grid of tappable tiles */
   .bytype-grid {
     display: grid;
@@ -4972,6 +5027,12 @@ let btExpanded = null; // currently expanded type ('4x4', 'hwpo_intervals', etc.
 // Equipment filter state per type. Keyed by type, value is equipment code or 'all'.
 // Resets when the tile collapses, so each fresh expansion starts at 'all'.
 const btEquipFilter = {};
+// View mode per type: 'list' (default) or 'calendar'. Persists across re-renders
+// while the tile is expanded; cleared when the tile collapses.
+const btViewMode = {};
+// Calendar month state per type. First time you open calendar for a type, we
+// jump to the most recent session's month; afterwards prev/next persists.
+const btCalendarMonth = {};
 
 // Types where the equipment selector is shown. 4x4 and HWPO are mostly
 // Assault Runner per training pattern, so an equipment filter would mostly be
@@ -5064,34 +5125,160 @@ function renderByTypeDetail(type) {
     `;
   }
 
-  const rowsHtml = filtered.length === 0
-    ? `<div class="kpi-detail-empty">No sessions match this filter.</div>`
-    : filtered.map(r => {
-        const meta = SESSION_LABELS[r.type] || SESSION_LABELS.other;
-        const css = cssMap[r.type] || 'type-other';
-        return `
-          <div class="kpi-detail-row" data-id="${r.id}">
-            <span class="kpi-detail-date">${r.date}</span>
-            <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
-            <span class="kpi-detail-metric">${metricFor(r)}</span>
-          </div>
-        `;
-      }).join('');
+  const mode = btViewMode[type] || 'list';
+  const toggleHtml = `
+    <div class="bt-view-toggle">
+      <button class="bt-view-btn${mode === 'list' ? ' active' : ''}" data-view="list">List</button>
+      <button class="bt-view-btn${mode === 'calendar' ? ' active' : ''}" data-view="calendar">Calendar</button>
+    </div>
+  `;
 
-  container.innerHTML = chipsHtml + rowsHtml;
+  let bodyHtml;
+  if (mode === 'list') {
+    bodyHtml = filtered.length === 0
+      ? `<div class="kpi-detail-empty">No sessions match this filter.</div>`
+      : filtered.map(r => {
+          const meta = SESSION_LABELS[r.type] || SESSION_LABELS.other;
+          const css = cssMap[r.type] || 'type-other';
+          return `
+            <div class="kpi-detail-row" data-id="${r.id}">
+              <span class="kpi-detail-date">${r.date}</span>
+              <span class="kpi-detail-type-badge ${css}">${meta.label}</span>
+              <span class="kpi-detail-metric">${metricFor(r)}</span>
+            </div>
+          `;
+        }).join('');
+  } else {
+    // Calendar view: month grid showing only days that contain a session of
+    // this type (after equipment filter). Other days remain plain.
+    if (!btCalendarMonth[type]) {
+      const mostRecent = filtered[0] || allOfType[0];
+      const d = mostRecent ? new Date(mostRecent.date + 'T12:00:00') : new Date();
+      btCalendarMonth[type] = new Date(d.getFullYear(), d.getMonth(), 1);
+    }
+    const monthDate = btCalendarMonth[type];
+    const monthLabel = `${monthDate.toLocaleString('en-US', { month: 'long' })} ${monthDate.getFullYear()}`;
+    bodyHtml = `
+      <div class="bt-cal-header">
+        <button class="bt-cal-prev" type="button" aria-label="Previous month">‹</button>
+        <div class="bt-cal-title">${monthLabel}</div>
+        <button class="bt-cal-next" type="button" aria-label="Next month">›</button>
+      </div>
+      <div class="cal-grid bt-cal-grid"></div>
+      ${filtered.length === 0 ? '<div class="bt-cal-empty">No sessions match this filter.</div>' : ''}
+    `;
+  }
+
+  container.innerHTML = toggleHtml + chipsHtml + bodyHtml;
   container.style.display = 'block';
 
-  // Wire up equipment chip clicks: tap to filter, re-render the list.
+  // Toggle pill: switches between list and calendar.
+  container.querySelectorAll('.bt-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btViewMode[type] = btn.dataset.view;
+      renderByTypeDetail(type);
+    });
+  });
+  // Wire up equipment chip clicks: tap to filter, re-render.
   container.querySelectorAll('.bt-equip-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       btEquipFilter[type] = chip.dataset.equip;
       renderByTypeDetail(type);
     });
   });
-  // Row taps open the modal as before.
-  container.querySelectorAll('.kpi-detail-row').forEach(row => {
-    row.addEventListener('click', () => openModal(row.dataset.id));
-  });
+
+  if (mode === 'list') {
+    // Row taps open the modal as before.
+    container.querySelectorAll('.kpi-detail-row').forEach(row => {
+      row.addEventListener('click', () => openModal(row.dataset.id));
+    });
+  } else {
+    paintByTypeCalendar(type, filtered);
+    container.querySelector('.bt-cal-prev').addEventListener('click', () => {
+      const m = btCalendarMonth[type];
+      btCalendarMonth[type] = new Date(m.getFullYear(), m.getMonth() - 1, 1);
+      renderByTypeDetail(type);
+    });
+    container.querySelector('.bt-cal-next').addEventListener('click', () => {
+      const m = btCalendarMonth[type];
+      btCalendarMonth[type] = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+      renderByTypeDetail(type);
+    });
+  }
+}
+
+// Paints the calendar grid inside the By-type drilldown panel for `type`,
+// coloring only days that contain one of the (filtered) sessions and
+// attaching a click handler that opens the most recent session of that day.
+function paintByTypeCalendar(type, filteredRows) {
+  const grid = document.querySelector('#bt-detail .bt-cal-grid');
+  if (!grid) return;
+  const monthDate = btCalendarMonth[type];
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const firstOfMonth = new Date(year, month, 1);
+  const firstDow = (firstOfMonth.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const prevMonthLastDay = new Date(year, month, 0).getDate();
+
+  const byDate = {};
+  for (const r of filteredRows) {
+    if (!r.date) continue;
+    (byDate[r.date] = byDate[r.date] || []).push(r);
+  }
+
+  const cssMap = {
+    '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
+    'long_run': 'type-long_run', 'z2': 'type-z2',
+  };
+  const typeCss = cssMap[type] || 'type-other';
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) {
+    cells.push({ day: prevMonthLastDay - firstDow + 1 + i, month: month - 1, outside: true });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push({ day: d, month, outside: false });
+  }
+  while (cells.length < 42) {
+    cells.push({ day: cells.length - firstDow - daysInMonth + 1, month: month + 1, outside: true });
+  }
+
+  grid.innerHTML = '';
+  for (const c of cells) {
+    const cellDate = new Date(year, c.month, c.day);
+    const iso = `${cellDate.getFullYear()}-${pad2(cellDate.getMonth() + 1)}-${pad2(cellDate.getDate())}`;
+    const sessions = byDate[iso] || [];
+
+    const div = document.createElement('div');
+    div.className = 'cal-day';
+    if (c.outside) div.classList.add('outside');
+    if (iso === todayIso) div.classList.add('today');
+
+    if (sessions.length > 0) {
+      div.classList.add('has-session', typeCss);
+      const mostRecent = sessions.reduce((a, b) =>
+        (a.createdAt || '') > (b.createdAt || '') ? a : b);
+      div.addEventListener('click', () => openModal(mostRecent.id));
+      if (sessions.length > 1) {
+        const dots = document.createElement('div');
+        dots.className = 'cal-dot-row';
+        for (let i = 0; i < Math.min(sessions.length, 3); i++) {
+          const d = document.createElement('span');
+          d.className = 'cal-dot';
+          d.style.background = 'currentColor';
+          dots.appendChild(d);
+        }
+        div.appendChild(dots);
+      }
+    }
+
+    const num = document.createElement('span');
+    num.textContent = c.day;
+    div.appendChild(num);
+    grid.appendChild(div);
+  }
 }
 
 // Wire up click handlers on the four By-type tiles.
