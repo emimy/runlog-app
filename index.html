@@ -752,6 +752,7 @@
   .bt-tile.bt-tile-hwpo_intervals .lbl-only { color: #d8b4fe; }
   .bt-tile.bt-tile-long_run .lbl-only       { color: #fcd34d; }
   .bt-tile.bt-tile-z2 .lbl-only             { color: #86efac; }
+  .bt-tile.bt-tile-football .lbl-only       { color: #f9a8d4; }
 
   /* Selected state: switch the surface to the type tint and outline. */
   .bt-tile.bt-tile-4x4.selected {
@@ -770,11 +771,16 @@
     background: rgba(74, 222, 128, 0.15);
     outline: 1px solid rgba(74, 222, 128, 0.5);
   }
+  .bt-tile.bt-tile-football.selected {
+    background: rgba(244, 114, 182, 0.15);
+    outline: 1px solid rgba(244, 114, 182, 0.5);
+  }
   /* The generic selected rule above colors .lbl-only green; override per-type. */
   .bt-tile.bt-tile-4x4.selected .lbl-only            { color: #fca5a5; }
   .bt-tile.bt-tile-hwpo_intervals.selected .lbl-only { color: #d8b4fe; }
   .bt-tile.bt-tile-long_run.selected .lbl-only       { color: #fcd34d; }
   .bt-tile.bt-tile-z2.selected .lbl-only             { color: #86efac; }
+  .bt-tile.bt-tile-football.selected .lbl-only       { color: #f9a8d4; }
 
   /* Subtitle line under each By-type tile (count + average) */
   .bt-sub {
@@ -1956,6 +1962,10 @@
         <div class="kpi tappable bt-tile bt-tile-z2" id="bt-tile-z2" data-bt="z2" role="button" tabindex="0">
           <div class="lbl-only">Zone 2</div>
           <div class="bt-sub" id="bt-sub-z2">–</div>
+        </div>
+        <div class="kpi tappable bt-tile bt-tile-football" id="bt-tile-football" data-bt="football" role="button" tabindex="0">
+          <div class="lbl-only">Football</div>
+          <div class="bt-sub" id="bt-sub-football">–</div>
         </div>
       </div>
       <div id="bt-detail" class="kpi-detail" style="display:none"></div>
@@ -4930,6 +4940,17 @@ function renderByTypeSummary() {
     const a = avg(s, r => r.mins);
     setSub('z2', s.length, a == null ? '–' : `${Math.round(a)}m`);
   }
+  // Football — avg distance (km), fall back to duration
+  {
+    const s = statsFor('football');
+    const aDist = avg(s, r => r.distanceKm);
+    if (aDist != null) {
+      setSub('football', s.length, `${aDist.toFixed(1)} km`);
+    } else {
+      const aDur = avg(s, r => r.mins);
+      setSub('football', s.length, aDur == null ? '–' : `${Math.round(aDur)}m`);
+    }
+  }
 }
 
 // Build the contextual list of sessions for a given KPI within the current
@@ -4979,7 +5000,7 @@ function renderKpiDetail(kpi) {
     const cssMap = {
       '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
       'long_run': 'type-long_run', 'z2': 'type-z2',
-      'gps_outdoor': 'type-z2', 'other': 'type-other',
+      'gps_outdoor': 'type-z2', 'football': 'type-football', 'other': 'type-other',
     };
     const css = cssMap[s.type] || 'type-other';
     return `
@@ -5079,7 +5100,7 @@ function renderByTypeDetail(type) {
       if (r.z4 == null && r.z5 == null) return '–';
       return `Z4+Z5 ${(z4 + z5).toFixed(1)}m`;
     }
-    if (type === 'long_run' || type === 'z2') {
+    if (type === 'long_run' || type === 'z2' || type === 'football') {
       // Build "X km · Ym · Z km/h", computing missing pieces where possible.
       // Each piece is wrapped in a span so it can be color-coded:
       //   distance → blue (volume), minutes → neutral, speed → green (intensity).
@@ -5102,6 +5123,7 @@ function renderByTypeDetail(type) {
   const cssMap = {
     '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
     'long_run': 'type-long_run', 'z2': 'type-z2',
+    'football': 'type-football',
   };
 
   // Build equipment selector chips. Only show equipment values that actually
@@ -5236,6 +5258,7 @@ function paintByTypeCalendar(type, filteredRows) {
   const cssMap = {
     '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
     'long_run': 'type-long_run', 'z2': 'type-z2',
+    'football': 'type-football',
   };
   const typeCss = cssMap[type] || 'type-other';
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -5288,7 +5311,7 @@ function paintByTypeCalendar(type, filteredRows) {
 }
 
 // Wire up click handlers on the four By-type tiles.
-['4x4', 'hwpo_intervals', 'long_run', 'z2'].forEach(type => {
+['4x4', 'hwpo_intervals', 'long_run', 'z2', 'football'].forEach(type => {
   const tile = document.getElementById('bt-tile-' + type);
   if (!tile) return;
   tile.addEventListener('click', () => {
@@ -5299,7 +5322,7 @@ function paintByTypeCalendar(type, filteredRows) {
       document.getElementById('bt-detail').style.display = 'none';
       tile.classList.remove('selected');
     } else {
-      ['4x4', 'hwpo_intervals', 'long_run', 'z2'].forEach(t => {
+      ['4x4', 'hwpo_intervals', 'long_run', 'z2', 'football'].forEach(t => {
         document.getElementById('bt-tile-' + t).classList.remove('selected');
       });
       btExpanded = type;
@@ -5448,7 +5471,7 @@ function showWeekKmBreakdown(bucket) {
   const cssMap = {
     '4x4': 'type-4x4', 'hwpo_intervals': 'type-hwpo',
     'long_run': 'type-long_run', 'z2': 'type-z2',
-    'gps_outdoor': 'type-z2', 'other': 'type-other',
+    'gps_outdoor': 'type-z2', 'football': 'type-football', 'other': 'type-other',
   };
   const sorted = [...bucket.sessions].sort((a, b) => b.date.localeCompare(a.date));
   const headerHtml = `
