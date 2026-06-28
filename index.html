@@ -2024,7 +2024,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-04-21-44';
+const APP_VERSION = '2026-06-29-45';
 
 // ============================================================
 // IndexedDB setup
@@ -6276,9 +6276,21 @@ function buildWhoopDataFromWorkout(w) {
   };
 }
 
-// Fetch running workouts overlapping the given date (and the day before, to
-// catch cross-midnight runs). Returns candidates sorted by local start time.
-async function whoopRunningWorkoutsFor(dateStr) {
+// Map a logged session type to the Whoop sport_name(s) that should match it.
+// Whoop names some sports differently than we label them (e.g. football -> "soccer").
+// Anything not listed falls back to running, since most session types are runs.
+const SESSION_TYPE_TO_WHOOP_SPORTS = {
+  'football': ['soccer'],
+  // running-family session types all map to Whoop "running" via the fallback below
+};
+function whoopSportsForSessionType(sessionType) {
+  return SESSION_TYPE_TO_WHOOP_SPORTS[sessionType] || ['running', 'trail-running'];
+}
+
+// Fetch Whoop workouts overlapping the given date (and the day before, to
+// catch cross-midnight sessions), filtered to the sport(s) matching the logged
+// session type. Returns candidates sorted by local start time.
+async function whoopRunningWorkoutsFor(dateStr, sessionType) {
   // Build a UTC window covering [date-1, date+1] to be safe with TZ.
   const d = new Date(dateStr + 'T00:00:00Z');
   const startUtc = new Date(d.getTime() - 36 * 3600 * 1000).toISOString(); // 36h before
@@ -6290,10 +6302,11 @@ async function whoopRunningWorkoutsFor(dateStr) {
     limit: 25,
   });
   const all = data.records || [];
-  // Filter to running sessions whose LOCAL date is either the target date or the day before.
+  // Filter to the matching sport(s) whose LOCAL date is the target date or the day before.
+  const allowedSports = whoopSportsForSessionType(sessionType);
   const prevDate = new Date(d.getTime() - 24 * 3600 * 1000).toISOString().slice(0, 10);
   const runs = all.filter(w => {
-    if ((w.sport_name || '').toLowerCase() !== 'running') return false;
+    if (!allowedSports.includes((w.sport_name || '').toLowerCase())) return false;
     const localDate = toLocalDate(w.start);
     return localDate === dateStr || localDate === prevDate;
   });
@@ -6336,7 +6349,7 @@ async function enrichSessionWithWhoop(session) {
     return { enriched: false, reason: 'already_enriched' };
   }
   try {
-    const candidates = await whoopRunningWorkoutsFor(session.date);
+    const candidates = await whoopRunningWorkoutsFor(session.date, session.type);
     if (candidates.length === 0) {
       return { enriched: false, reason: 'no_workouts_found' };
     }
