@@ -2142,7 +2142,7 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains(PANTRY_STORE)) {
         // Foods available to log. Seeded with BUILTIN_FOODS on first run,
-        // then grown by photo or manual entry.
+        // then grown by manual entry.
         const ps = d.createObjectStore(PANTRY_STORE, { keyPath: 'id' });
         ps.createIndex('name', 'name', { unique: false });
       }
@@ -7536,7 +7536,7 @@ function computeMacros(item, grams) {
 }
 
 // Sanity-check a per-100g panel before trusting it — catches a misread
-// label or a hallucinated value from the vision endpoint.
+// label value typed in by hand.
 //   - every field numeric and >= 0
 //   - kcal <= 900 (pure fat is 900 kcal/100g; nothing exceeds it)
 //   - kcal roughly agrees with Atwater: 4*protein + 4*carbs + 9*fat
@@ -7572,7 +7572,7 @@ function validateMacroPanel(p) {
 
 // ============================================================
 // Nutrition — built-in foods
-// Common foods that have no package to photograph. Seeded into the
+// Common foods with no packet to read numbers off. Seeded into the
 // pantry store on first run so there is exactly one code path for
 // looking up a food, and so these stay editable if your eggs are a
 // different size than mine.

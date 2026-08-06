@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add food logging to the RunLog PWA — photograph a product label once to add it to a pantry, then log grams per meal against fixed daily targets of 2,500 kcal and 170 g protein.
+**Goal:** Add food logging to the RunLog PWA — enter a product's macros once to add it to a pantry, then log grams per meal against fixed daily targets of 2,500 kcal and 170 g protein.
 
-**Architecture:** All storage and computation is client-side in `runlog-app/index.html` (IndexedDB + a new "Food" tab), synced to `runlog-data` as two JSON files following the existing `vo2max.json` whole-file pattern. `runlog-auth` gains exactly one endpoint that holds `ANTHROPIC_API_KEY` and turns a label photo into per-100 g macros; it stores nothing and computes nothing else.
+**Revised 2026-08-06:** Tasks 8 and 9 (photo/vision) cancelled at Etienne's request. Task 7 is now the last task and carries the `APP_VERSION` bump.
 
-**Tech Stack:** Vanilla JS (no framework, no build step), IndexedDB, GitHub Contents API, Vercel serverless functions (Node 20, ESM), Claude Haiku 4.5 with structured outputs.
+**Architecture:** All storage and computation is client-side in `runlog-app/index.html` (IndexedDB + a new "Food" tab), synced to `runlog-data` as two JSON files following the existing `vo2max.json` whole-file pattern. `runlog-auth` is not touched.
+
+**Tech Stack:** Vanilla JS (no framework, no build step), IndexedDB, GitHub Contents API.
 
 **Spec:** `docs/superpowers/specs/2026-08-06-nutrition-tracking-design.md`
 
@@ -15,10 +17,9 @@
 - **No build step, no new runtime dependencies.** `runlog-app` is a single hand-edited `index.html` served from GitHub Pages; `runlog-auth` has zero dependencies in `package.json`.
 - **All new PWA code goes in `runlog-app/index.html`.** A separate `.js` file would sit outside the `APP_VERSION` self-update check at `index.html:7536` and could go stale against new HTML.
 - **Follow existing section style:** `// ====` banner comments, `uid()` for IDs, `toast(msg, isError)` for user feedback, `getConfig()`/`setConfig()` for the config store, `.field` / `.settings-group` / `.empty-state` / `button.primary` CSS classes.
-- **Bump `APP_VERSION`** (`index.html:2027`) in the final task only — it triggers the update banner for a running client.
+- **Bump `APP_VERSION`** (`index.html:2027`) in Task 7, the final task — it triggers the update banner for a running client.
 - **Daily targets are fixed:** `DAILY_KCAL_TARGET = 2500`, `DAILY_PROTEIN_TARGET = 170`. Do not make them strain-dependent.
-- **Never fabricate macros.** Every vision failure path ends at a blank manual form.
-- **Model ID is exactly `claude-haiku-4-5`.** No date suffix.
+- **Never fabricate macros.** A food with missing numbers is rejected, not guessed.
 - Branch: `feat/nutrition-tracking` (already created; spec already committed there).
 
 ---
@@ -27,9 +28,7 @@
 
 | File | Responsibility | Change |
 |---|---|---|
-| `runlog-app/index.html` | Everything client-side: stores, math, food table, UI, sync | Modify (~1,100 lines added) |
-| `runlog-auth/api/nutrition-label.js` | Label photo → per-100 g macros | Create (~95 lines) |
-| `runlog-auth/README.md` | Document the new endpoint + env var | Modify |
+| `runlog-app/index.html` | Everything: stores, math, food table, UI, sync | Modify (~950 lines added) |
 | `runlog-app/docs/superpowers/plans/…` | This plan | Already created |
 
 Within `index.html`, new code is added as five banner-delimited sections placed **after** the VO2 max section (which ends at `index.html:7168`) so the diff stays contiguous:
@@ -242,7 +241,7 @@ function computeMacros(item, grams) {
 }
 
 // Sanity-check a per-100g panel before trusting it — catches a misread
-// label or a hallucinated value from the vision endpoint.
+// label value typed in by hand.
 //   - every field numeric and >= 0
 //   - kcal <= 900 (pure fat is 900 kcal/100g; nothing exceeds it)
 //   - kcal within 10% of 4*protein + 4*carbs + 9*fat
@@ -378,7 +377,7 @@ const NUTRITION_STORE = 'nutrition';
 ```javascript
       if (!d.objectStoreNames.contains(PANTRY_STORE)) {
         // Foods available to log. Seeded with BUILTIN_FOODS on first run,
-        // then grown by photo or manual entry.
+        // then grown by manual entry.
         const ps = d.createObjectStore(PANTRY_STORE, { keyPath: 'id' });
         ps.createIndex('name', 'name', { unique: false });
       }
@@ -498,7 +497,7 @@ Reload the self-test URL. Expected: `BUILTIN_FOODS is not defined`.
 ```javascript
 // ============================================================
 // Nutrition — built-in foods
-// Common foods that have no package to photograph. Seeded into the
+// Common foods with no packet to read numbers off. Seeded into the
 // pantry store on first run so there is exactly one code path for
 // looking up a food, and so these stay editable if your eggs are a
 // different size than mine.
@@ -1158,7 +1157,7 @@ git commit -m "feat(nutrition): log-entry form with dry/cooked/units modes"
 - Consumes: `getAllPantry()`, `putPantryItem()`, `deletePantryItem()`, `validateMacroPanel()`, `COOKED_FACTORS`, `uid()`, `toast()`, `escapeHtml()`
 - Produces:
   - `renderFoodPantry() -> Promise<void>`
-  - `openPantryForm(item|null, prefill|null) -> void` — `prefill` is the shape the vision endpoint returns (Task 9 passes it)
+  - `openPantryForm(item|null, prefill|null) -> void` — `prefill` seeds a new food from an external source; unused now that Task 9 is cancelled, kept as the seam for a future photo/barcode feature. Callers pass `null`.
   - `readPantryForm() -> {item, issues}` — reads and validates the form
 
 - [ ] **Step 1: Write the failing test**
@@ -1166,7 +1165,7 @@ git commit -m "feat(nutrition): log-entry form with dry/cooked/units modes"
 ```javascript
   _selfTestAsync.push((async () => {
     await openDB();
-    // openPantryForm must accept a vision-endpoint prefill and populate fields.
+    // openPantryForm must accept a prefill object and populate the fields.
     setFoodMode('pantry');
     await renderFoodPantry();
     openPantryForm(null, {
@@ -1204,10 +1203,8 @@ async function renderFoodPantry() {
 
   el.innerHTML =
     '<div class="pantry-actions">' +
-      '<button class="primary" id="pf-add-photo">📷 Add from label</button>' +
-      '<button id="pf-add-manual">Add manually</button>' +
+      '<button class="primary" id="pf-add-manual">+ Add a food</button>' +
     '</div>' +
-    '<input type="file" id="pf-file" accept="image/*" capture="environment" style="display:none">' +
     '<div id="pf-form-wrap" style="display:none"></div>' +
     '<div class="field"><input type="text" id="pf-filter" placeholder="Filter…" ' +
       'autocomplete="off" autocapitalize="off" spellcheck="false"></div>' +
@@ -1234,14 +1231,11 @@ async function renderFoodPantry() {
 
   document.getElementById('pf-filter').addEventListener('input', e => drawList(e.target.value));
   document.getElementById('pf-add-manual').addEventListener('click', () => openPantryForm(null, null));
-  document.getElementById('pf-add-photo').addEventListener('click', () =>
-    document.getElementById('pf-file').click());
-  // The file input's change handler is wired in Task 9.
   drawList('');
 }
 
 // The single write path into the pantry. `item` edits an existing food;
-// `prefill` seeds a new one from the vision endpoint. Both may be null
+// `prefill` seeds a new one from an external source. Both may be null
 // for a blank manual entry.
 function openPantryForm(item, prefill) {
   const wrap = document.getElementById('pf-form-wrap');
@@ -1535,484 +1529,36 @@ git commit -m "feat(nutrition): sync pantry.json and nutrition.json to runlog-da
 
 ---
 
-### Task 8: Vision endpoint in runlog-auth
+### ~~Task 8: Vision endpoint~~ — CANCELLED 2026-08-06
 
-**Files:**
-- Create: `runlog-auth/api/nutrition-label.js`
-- Modify: `runlog-auth/README.md`
+Dropped at Etienne's request: foods are entered by hand instead. No
+`runlog-auth` changes, no `ANTHROPIC_API_KEY`, no deploy, no per-use cost.
 
-**Interfaces:**
-- Consumes: `ANTHROPIC_API_KEY`, `ALLOWED_ORIGIN` (Vercel env vars)
-- Produces: `POST /api/nutrition-label` accepting `{image: base64, media_type: string}` and returning `{readable, reason, name, category, per100g:{kcal,protein,carbs,fat}}`
+### ~~Task 9: Photo capture~~ — CANCELLED 2026-08-06
 
-- [ ] **Step 1: Write the failing test**
+Dropped with Task 8. `openPantryForm(item, prefill)` keeps its `prefill`
+parameter — it costs nothing, and it is the seam a future photo or barcode
+feature would plug into without touching the form itself. Callers pass `null`.
 
-There is no test runner in `runlog-auth`. The test is a curl script — create `runlog-auth/test-nutrition-label.sh`:
-
-```bash
-#!/usr/bin/env bash
-# Manual verification for /api/nutrition-label.
-# Usage: BASE=http://localhost:3000 ./test-nutrition-label.sh path/to/label.jpg
-set -uo pipefail
-BASE="${BASE:-http://localhost:3000}"
-IMG="${1:?usage: $0 <label-image>}"
-fail=0
-check() { if [ "$2" = "$3" ]; then echo "  PASS $1"; else echo "  FAIL $1 (got $2, want $3)"; fail=1; fi; }
-
-echo "1. OPTIONS preflight"
-code=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "$BASE/api/nutrition-label")
-check "returns 204" "$code" "204"
-
-echo "2. GET is rejected"
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/nutrition-label")
-check "returns 405" "$code" "405"
-
-echo "3. missing body"
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/nutrition-label" \
-  -H 'Content-Type: application/json' -d '{}')
-check "returns 400" "$code" "400"
-
-echo "4. real label photo"
-b64=$(base64 < "$IMG" | tr -d '\n')
-resp=$(curl -s -X POST "$BASE/api/nutrition-label" -H 'Content-Type: application/json' \
-  -d "{\"image\":\"$b64\",\"media_type\":\"image/jpeg\"}")
-echo "$resp" | python3 -c '
-import json,sys
-d=json.load(sys.stdin)
-assert "readable" in d, "missing readable"
-if d["readable"]:
-    p=d["per100g"]
-    for k in ("kcal","protein","carbs","fat"):
-        assert isinstance(p[k],(int,float)), k+" not numeric"
-    derived=4*p["protein"]+4*p["carbs"]+9*p["fat"]
-    print("  PASS readable:", d["name"], p, "derived kcal", round(derived,1))
-else:
-    print("  PASS unreadable, reason:", d.get("reason"))
-' || fail=1
-
-exit $fail
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-```bash
-cd runlog-auth && chmod +x test-nutrition-label.sh && npx vercel dev --listen 3000 &
-sleep 8 && ./test-nutrition-label.sh ~/Desktop/label.jpg
-```
-
-Expected: every check FAILs with 404 — the endpoint does not exist.
-
-- [ ] **Step 3: Write the minimal implementation**
-
-Create `runlog-auth/api/nutrition-label.js`:
-
-```javascript
-// api/nutrition-label.js
-// Reads a product's nutrition label from a photo and returns per-100g macros.
-//
-// Exists in this service for the same reason oauth-exchange does: it holds a
-// secret (ANTHROPIC_API_KEY) that must not reach the browser. It stores
-// nothing and computes nothing beyond normalising the model's answer.
-//
-// The response is schema-constrained via output_config.format, so the client
-// gets parseable JSON rather than prose it has to extract.
-
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-haiku-4-5";
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
-
-const PANEL_SCHEMA = {
-  type: "object",
-  properties: {
-    readable: { type: "boolean" },
-    reason: { type: ["string", "null"] },
-    name: { type: ["string", "null"] },
-    category: {
-      type: ["string", "null"],
-      enum: ["pasta", "rice", "oats", "legumes", "couscous", "grain", "meat",
-             "fish", "dairy", "fat", "fruit", "veg", "nuts", "supplement",
-             "bread", "other", null],
-    },
-    per100g: {
-      type: ["object", "null"],
-      properties: {
-        kcal:    { type: "number" },
-        protein: { type: "number" },
-        carbs:   { type: "number" },
-        fat:     { type: "number" },
-      },
-      required: ["kcal", "protein", "carbs", "fat"],
-      additionalProperties: false,
-    },
-  },
-  required: ["readable", "reason", "name", "category", "per100g"],
-  additionalProperties: false,
-};
-
-const PROMPT = [
-  "Read the nutrition information panel in this photo.",
-  "",
-  "Return values PER 100 GRAMS of the product as sold. Critical rules:",
-  "- If the panel lists per-serving values, convert to per-100g using the",
-  "  stated serving size. If both are shown, use the per-100g column.",
-  "- If energy is given in kJ only, convert: kcal = kJ / 4.184.",
-  "- Use the product as sold (dry/raw), not as prepared, when both appear.",
-  "- Report carbohydrate as total carbohydrate, not 'of which sugars'.",
-  "",
-  "Set readable=false with a short reason if the panel is blurry, cropped,",
-  "absent, or you are otherwise unsure. Never guess or infer typical values",
-  "for the product type - a wrong number is far worse than no number.",
-  "",
-  "name: the product name including brand if visible.",
-  "category: best fit from the enum, or null.",
-].join("\n");
-
-function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Max-Age": "86400",
-  };
-}
-
-export default async function handler(req, res) {
-  const setCors = () =>
-    Object.entries(corsHeaders()).forEach(([k, v]) => res.setHeader(k, v));
-
-  if (req.method === "OPTIONS") { setCors(); return res.status(204).end(); }
-  if (req.method !== "POST") {
-    setCors();
-    return res.status(405).json({ error: "method_not_allowed" });
-  }
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    setCors();
-    return res.status(500).json({ error: "server_not_configured" });
-  }
-
-  let body = req.body;
-  if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch { body = {}; }
-  }
-  const { image, media_type } = body || {};
-  if (!image || typeof image !== "string") {
-    setCors();
-    return res.status(400).json({ error: "missing_params", need: ["image", "media_type"] });
-  }
-  // base64 expands ~4/3; check the decoded size.
-  if (image.length * 0.75 > MAX_IMAGE_BYTES) {
-    setCors();
-    return res.status(413).json({ error: "image_too_large", max_bytes: MAX_IMAGE_BYTES });
-  }
-
-  try {
-    const upstream = await fetch(ANTHROPIC_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 1024,
-        output_config: { format: { type: "json_schema", schema: PANEL_SCHEMA } },
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: media_type || "image/jpeg", data: image } },
-            { type: "text", text: PROMPT },
-          ],
-        }],
-      }),
-    });
-
-    const text = await upstream.text();
-    if (!upstream.ok) {
-      setCors();
-      return res.status(502).json({
-        error: "upstream_failed",
-        upstream_status: upstream.status,
-        detail: text.slice(0, 300),
-      });
-    }
-
-    const msg = JSON.parse(text);
-    // A safety refusal returns 200 with stop_reason "refusal" and no content.
-    if (msg.stop_reason === "refusal") {
-      setCors();
-      return res.status(200).json({
-        readable: false, reason: "The model declined to read this image.",
-        name: null, category: null, per100g: null,
-      });
-    }
-    const block = (msg.content || []).find(b => b.type === "text");
-    if (!block) {
-      setCors();
-      return res.status(200).json({
-        readable: false, reason: "No readable response from the model.",
-        name: null, category: null, per100g: null,
-      });
-    }
-
-    let parsed;
-    try { parsed = JSON.parse(block.text); }
-    catch {
-      setCors();
-      return res.status(200).json({
-        readable: false, reason: "Could not parse the model's response.",
-        name: null, category: null, per100g: null,
-      });
-    }
-
-    setCors();
-    return res.status(200).json(parsed);
-  } catch (err) {
-    setCors();
-    return res.status(502).json({ error: "internal_error", message: err.message });
-  }
-}
-```
-
-Add to `runlog-auth/README.md` under the endpoints section:
-
-```markdown
-### `POST /api/nutrition-label`
-
-Read a product's nutrition panel from a photo. Holds `ANTHROPIC_API_KEY` so the
-PWA doesn't have to.
-
-Body:
-```json
-{ "image": "<base64, no data: prefix>", "media_type": "image/jpeg" }
-```
-
-Returns per-100g macros, or `readable: false` with a reason when the panel
-can't be read. Never guesses values.
-
-```json
-{ "readable": true, "reason": null, "name": "Barilla Penne Rigate",
-  "category": "pasta",
-  "per100g": { "kcal": 352, "protein": 12.5, "carbs": 71.2, "fat": 1.5 } }
-```
-
-Uses `claude-haiku-4-5`, ~$0.0026 per label. Images over 5 MB are rejected
-with 413; the client resizes to ≤1568px before upload.
-
-Requires env var `ANTHROPIC_API_KEY` in addition to the WHOOP ones.
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-```bash
-cd runlog-auth
-ANTHROPIC_API_KEY=sk-ant-... npx vercel dev --listen 3000 &
-sleep 8 && ./test-nutrition-label.sh ~/Desktop/label.jpg
-```
-
-Expected: all four checks PASS, and check 4 prints the parsed panel with a `derived kcal` close to the reported `kcal`. Also photograph something with no nutrition panel and confirm it returns `readable: false` rather than invented numbers.
-
-- [ ] **Step 5: Commit and deploy**
-
-```bash
-cd runlog-auth
-git add api/nutrition-label.js README.md test-nutrition-label.sh
-git commit -m "feat: add /api/nutrition-label endpoint for reading product labels"
-vercel env add ANTHROPIC_API_KEY   # paste key, select Production
-vercel --prod
-```
-
----
-
-### Task 9: Photo capture and pre-fill wiring
-
-**Files:**
-- Modify: `runlog-app/index.html` — add photo handling to the UI section; wire the `#pf-file` change handler left open in Task 6; bump `APP_VERSION`
-
-**Interfaces:**
-- Consumes: `openPantryForm()`, `validateMacroPanel()`, `toast()`, `getConfig()`
-- Produces:
-  - `resizeImageFile(file, maxEdge) -> Promise<{base64, mediaType}>`
-  - `readLabelPhoto(file) -> Promise<prefill|null>`
-  - `NUTRITION_API_BASE` — reuses the existing auth-broker base URL
-
-- [ ] **Step 1: Write the failing test**
-
-```javascript
-  _selfTestAsync.push((async () => {
-    // resizeImageFile must cap the long edge and return base64 without the
-    // data: prefix (the endpoint expects raw base64).
-    const canvas = document.createElement('canvas');
-    canvas.width = 3000; canvas.height = 2000;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 3000, 2000);
-    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
-    const file = new File([blob], 'test.jpg', { type: 'image/jpeg' });
-
-    const out = await resizeImageFile(file, 1568);
-    assert(typeof out.base64 === 'string' && out.base64.length > 0,
-      'resizeImageFile returns base64');
-    assert(!out.base64.startsWith('data:'),
-      'resizeImageFile strips the data: prefix');
-    assert(out.mediaType === 'image/jpeg', 'resizeImageFile reports media type');
-
-    // Verify the encoded image really was scaled down.
-    const img = new Image();
-    await new Promise((res, rej) => {
-      img.onload = res; img.onerror = rej;
-      img.src = 'data:image/jpeg;base64,' + out.base64;
-    });
-    assert(Math.max(img.width, img.height) <= 1568,
-      'resized long edge is capped at 1568px (got ' + img.width + 'x' + img.height + ')');
-    assertClose(img.width / img.height, 1.5, 0.02, 'aspect ratio preserved');
-  })());
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Reload the self-test URL. Expected: `resizeImageFile is not defined`.
-
-- [ ] **Step 3: Write the minimal implementation**
-
-```javascript
-// --- label photo ---------------------------------------------------------
-// The broker base URL is already stored for the WHOOP OAuth flow; reuse it
-// so there's one place to change if the Vercel deployment moves.
-const NUTRITION_API_BASE = 'https://runlog-auth.vercel.app';
-
-// Downscale before upload. Two reasons: Haiku 4.5's image tier tops out
-// around 1568px on the long edge, and a 12MP phone photo would otherwise
-// blow past the endpoint's 5MB limit for no accuracy gain.
-function resizeImageFile(file, maxEdge) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      resolve({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image')); };
-    img.src = url;
-  });
-}
-
-// Send a label photo to the broker and turn the answer into a pantry-form
-// prefill. Returns null on any failure — the caller then opens a blank form,
-// so a vision failure degrades to typing rather than blocking.
-async function readLabelPhoto(file) {
-  let payload;
-  try {
-    payload = await resizeImageFile(file, 1568);
-  } catch (e) {
-    toast(e.message, true);
-    return null;
-  }
-
-  let res, data;
-  try {
-    res = await fetch(NUTRITION_API_BASE + '/api/nutrition-label', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: payload.base64, media_type: payload.mediaType }),
-    });
-    data = await res.json();
-  } catch (e) {
-    toast('Could not reach the label reader. Enter it manually.', true);
-    return null;
-  }
-
-  if (!res.ok) {
-    const msg = data && data.error === 'server_not_configured'
-      ? 'Label reader is not configured yet.'
-      : data && data.error === 'image_too_large'
-        ? 'That photo is too large.'
-        : 'Label reader failed. Enter it manually.';
-    toast(msg, true);
-    return null;
-  }
-  if (!data.readable) {
-    toast(data.reason || 'Could not read that label. Enter it manually.', true);
-    return null;
-  }
-
-  // Never trust the panel blindly — flag inconsistencies for review rather
-  // than silently accepting a misread number.
-  const v = validateMacroPanel(data.per100g);
-  return {
-    name: data.name || '',
-    category: data.category || 'other',
-    per100g: data.per100g,
-    _issues: v.ok ? [] : v.issues,
-  };
-}
-```
-
-Wire the file input — replace the `// The file input's change handler is wired in Task 9.` comment in `renderFoodPantry()`:
-
-```javascript
-  document.getElementById('pf-file').addEventListener('change', async (ev) => {
-    const file = ev.target.files && ev.target.files[0];
-    ev.target.value = '';           // allow re-picking the same file
-    if (!file) return;
-    toast('Reading label…');
-    const prefill = await readLabelPhoto(file);
-    // Either way we land on the form — prefilled if it worked, blank if not.
-    openPantryForm(null, prefill);
-  });
-```
-
-Bump `index.html:2027`:
-
-```javascript
-const APP_VERSION = '2026-08-06-46';
-```
-
-- [ ] **Step 4: Run the tests and verify end to end**
-
-```bash
-open 'http://localhost:8123/index.html?selftest=1'   # expect 32 groups passed
-```
-
-Then on a phone against the deployed PWA: Food → Pantry → "Add from label" → photograph a real pasta box → confirm the form pre-fills with the right numbers → Save → Log 120 g dry → confirm Today's totals. Then photograph something with no label and confirm you get a message plus a blank form, not invented numbers.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add runlog-app/index.html
-git commit -m "feat(nutrition): photograph a label to pre-fill the pantry form"
-```
-
----
+Task 7 therefore becomes the final task, and `APP_VERSION` is bumped there.
 
 ## Verification checklist
 
-Run after Task 9, before merging:
+Run after Task 7, before merging:
 
-- [ ] `?selftest=1` reports 32 groups passed
+- [ ] `?selftest=1` reports all groups passed
 - [ ] All six tabs fit at 380px width
-- [ ] Add a food by photo; numbers match the box
-- [ ] Add a food manually; deliberately inconsistent numbers trigger the warning
+- [ ] Add a food by hand; deliberately inconsistent numbers trigger the warning
 - [ ] Log 120 g dry pasta and 288 g cooked pasta — both produce ~422 kcal
 - [ ] Log 3 eggs via units mode — ~21 g protein
 - [ ] Delete an entry; totals update
 - [ ] Reload; everything persists
 - [ ] `runlog-data` contains `pantry.json` and `nutrition.json` with correct counts
-- [ ] Photograph a non-label; get a message and a blank form, never numbers
 - [ ] Turn off wifi, log a meal, turn wifi on, reload — the dirty-flag retry pushes it
 - [ ] Existing features still work: log a run, log a strength session, Analyze charts render
 
 ## Known follow-ups (not in this plan)
 
-- `ALLOWED_ORIGIN` in `runlog-auth` still defaults to `*`; pin it to `https://emimy.github.io`
 - No weekly/trend view for nutrition — Today only
+- A future photo or barcode feature can reuse `openPantryForm(item, prefill)` without touching the form
 - `index.html` reaches ~8,800 lines; extracting CSS is the clean first split

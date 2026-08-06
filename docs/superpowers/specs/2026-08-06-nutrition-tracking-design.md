@@ -1,14 +1,18 @@
 # Nutrition tracking — design
 
 Date: 2026-08-06
-Status: approved, not yet implemented
+Status: in progress
+Revised 2026-08-06: photo/vision scope removed at Etienne's request — foods are
+entered manually. `runlog-auth` is untouched; no API key, no deploy, no cost.
+The manual form was already the single write path, so this removes a layer
+rather than changing the architecture.
 
 ## Problem
 
 RunLog logs training but not food. Etienne wants to log what he eats against a
-daily target, with as little typing as possible: photograph a product's
-nutrition label once, then log grams thereafter. For unpackaged foods ("3
-eggs") the app should already know the macros.
+daily target, with as little repeated typing as possible: enter a product's
+macros once, then log grams thereafter. For unpackaged foods ("3 eggs") the app
+should already know the macros.
 
 Targets are fixed: **2,500 kcal and 170 g protein per day**, every day. These
 came from analysing 17 months of WHOOP data (mean TDEE 2,321 kcal + ~200 kcal
@@ -16,41 +20,39 @@ NEAT correction) for a 33 y/o male, 75 kg, 1.65 m, training ~5×/week.
 
 ## Scope
 
-In scope: pantry of foods, photo-to-macros for packaged products, a built-in
-table of common foods, per-meal logging, daily totals against target, sync to
-`runlog-data`.
+In scope: pantry of foods entered by hand, a built-in table of common foods,
+per-meal logging, daily totals against target, sync to `runlog-data`.
 
-Out of scope: barcode scanning, plate photos with portion estimation, recipe
-composition, calorie cycling by training day (explicitly declined), micronutrients.
+Out of scope: **photo-to-macros / any vision endpoint (dropped 2026-08-06)**,
+barcode scanning, plate photos with portion estimation, recipe composition,
+calorie cycling by training day (explicitly declined), micronutrients.
 
 ## Decisions and rationale
 
 | Decision | Rationale |
 |---|---|
-| Pantry model (photo once, reuse) | Label photos are one-time per product; per-meal plate photos carry ±30–50% portion error, which swamps a 170 g protein target |
-| Manual form is the single write path; photo **pre-fills** it | One validation path; an edit form is needed regardless; vision failure degrades to typing instead of breaking |
+| Pantry model — enter a food once, reuse forever | Typing macros is a one-time cost per product; the daily flow is then pick-and-weigh |
+| Manual form is the single write path | One validation path, one place to fix a wrong number later |
 | Fixed 2,500 / 170 target | Chosen over strain-tiered and live-WHOOP targets — a target that drifts during the day can't be planned against |
 | Built-in food table over external API | Instant, offline, free, deterministic; covers ~95% of what he eats |
 | Two sync files (`pantry.json`, `nutrition.json`) | Mirrors the existing `vo2max.json` pattern; pantry rarely changes so meal logging doesn't rewrite it |
 | Code lives in `index.html` | No service worker; self-update works by regex-matching `APP_VERSION` out of the served `index.html` (`index.html:7536`). A separate `.js` file would sit outside that check and could go stale against new HTML |
-| Claude Haiku 4.5 for label reading | ~$0.0026 per label (~$0.13/yr at expected volume); reading a macro panel is OCR + arithmetic, not reasoning; supports structured outputs |
+| ~~Claude Haiku 4.5 for label reading~~ | **Dropped 2026-08-06.** Removed the only reason to touch `runlog-auth`, the only API key, and the only per-use cost. The pantry form it would have pre-filled already existed |
 
 ## Architecture
 
 ```
-runlog-app/index.html          runlog-auth/api/            runlog-data/
-─────────────────────          ────────────────            ────────────
-pantry + nutrition stores      nutrition-label.js  ──────► (nothing)
-food table (~80 items)           ANTHROPIC_API_KEY
-log form, Today view                 │                     pantry.json
-GitHub sync ─────────────────────────┼───────────────────► nutrition.json
-                                     ▼
-                              api.anthropic.com
-                              claude-haiku-4-5
+runlog-app/index.html                              runlog-data/
+─────────────────────                              ────────────
+pantry + nutrition stores
+food table (~80 items)                             pantry.json
+pantry form, log form, Today view                  nutrition.json
+GitHub sync ─────────────────────────────────────► (whole-file push)
 ```
 
-`runlog-auth` gains one endpoint and one secret. It stays a credential broker —
-no nutrition logic, no storage, no totals. All computation is client-side.
+Entirely contained in the PWA. `runlog-auth` is not touched — no new endpoint,
+no new secret. There is no server component and no network dependency beyond
+the GitHub sync that already exists.
 
 ## Data model
 
@@ -74,7 +76,7 @@ nutrition  keyPath 'id'     index on 'date'
   "per100g": { "kcal": 352, "protein": 12.5, "carbs": 71.2, "fat": 1.5 },
   "unit": null,
   "cookedFactor": 2.4,
-  "source": "photo",
+  "source": "manual",
   "createdAt": "2026-08-06T10:00:00Z",
   "updatedAt": "2026-08-06T10:00:00Z",
   "archived": false
@@ -84,7 +86,7 @@ nutrition  keyPath 'id'     index on 'date'
 - `unit` — `null` for weighed foods; `{ "label": "egg", "grams": 55 }` for
   countable ones, enabling "3 eggs".
 - `cookedFactor` — grams cooked per gram as-sold. Editable per item.
-- `source` — `photo` | `manual` | `builtin`.
+- `source` — `manual` | `builtin`.
 - `archived` — hides an item from the picker without breaking history.
 
 ### Log entry
@@ -142,56 +144,25 @@ Category defaults: pasta 2.4, rice 3.0, oats 3.0, dried legumes 2.4, couscous
 Foods that *lose* water use a factor below 1 and the same formula still holds:
 100 g raw chicken → 75 g cooked, and `75 / 0.75 = 100` recovers the raw weight.
 
-## The vision endpoint
+## Manual entry (was: the vision endpoint)
 
-`POST /api/nutrition-label` in `runlog-auth`, alongside the existing four
-handlers. Follows their conventions exactly: CORS preflight, `ALLOWED_ORIGIN`,
-method guard, `server_not_configured` when the key is missing.
+Foods are added through the pantry form: name, category, per-100 g kcal /
+protein / carbs / fat, optional cooked-conversion factor, optional unit weight.
+Roughly 20 seconds per product, done once per product.
 
-Request: `{ "image": "<base64>", "media_type": "image/jpeg" }`
-New env var: `ANTHROPIC_API_KEY`
-
-Model `claude-haiku-4-5`, with a forced JSON schema via
-`output_config.format` so the response is guaranteed parseable rather than
-prose requiring extraction:
-
-```json
-{
-  "readable": true,
-  "reason": null,
-  "name": "Barilla Penne Rigate",
-  "per100g": { "kcal": 352, "protein": 12.5, "carbs": 71.2, "fat": 1.5 },
-  "category": "pasta"
-}
-```
-
-The client resizes images to ≤1568 px on the long edge before upload — this
-matches Haiku 4.5's image tier and caps token cost at ~1,600 tokens per image.
-
-### Cost
-
-~1,850 input + ~150 output tokens per label at $1/$5 per million =
-**$0.0026 per label**, roughly $0.13/year at an expected ~50 new products.
-Billed to the Anthropic API organisation, which is separate from any Claude
-subscription.
+`runlog-auth` is **not modified**. No `ANTHROPIC_API_KEY`, no new endpoint, no
+deploy, no per-use cost.
 
 ## Error handling
 
-**Every vision failure path ends at the manual form.** No dead ends, and no
-fabricated numbers.
-
-| Failure | Behavior |
-|---|---|
-| `ANTHROPIC_API_KEY` unset | 500 `server_not_configured` |
-| Image > 5 MB | 413 server-side; client resizes first so this is a backstop |
-| Label unreadable | `readable: false` + `reason`; show it, open a **blank** form |
-| Network, 429, timeout | Show the error; open a blank form |
-| Malformed model output | Treated as unreadable |
+With no network call in the add-food path, the failure modes are typing
+mistakes. The form rejects a missing name or any missing macro outright, and
+warns (but still allows saving) when the numbers don't cohere.
 
 ### Macro-panel sanity check
 
-Before pre-filling, validate the returned panel to catch a misread or
-hallucinated value:
+When saving a food, validate the typed panel to catch a slip or a
+misread column on the packet:
 
 - all values numeric and ≥ 0
 - `kcal ≤ 900` per 100 g (pure fat is 900)
@@ -213,13 +184,14 @@ overshoot that is entirely normal. Nothing makes the derived value come out
 Verified: 0 of 80 built-in foods flagged, while still catching a nonsense
 panel, a 352→400 kcal misread, and a protein misread.
 
-**Known blind spot:** a uniformly scaled panel — per-serving values mistaken
-for per-100 g doubles everything — remains internally consistent and passes.
-No arithmetic check can catch that. Mitigations are the prompt instruction to
-convert per-serving values, and the user confirming every panel before saving.
+**Known blind spot:** a uniformly scaled panel — per-serving values typed in
+where per-100 g was wanted — stays internally consistent and passes. No
+arithmetic check can catch that; reading the right column off the packet is the
+only defence.
 
-On failure the fields still pre-fill but are flagged for review rather than
-silently accepted.
+On failure the form warns and asks for confirmation rather than refusing the
+save — some legitimate foods sit outside the check, and the user is the
+authority on what's on the packet in front of them.
 
 ### Sync failures
 
@@ -245,37 +217,39 @@ the GitHub copy lags.
 A sixth tab, **Food**, containing three views:
 
 1. **Today** (default) — totals vs 2,500 kcal / 170 g with progress bars,
-   grouped by meal, tap an entry to edit or delete.
-2. **Log** — pick food (search, recent-first), enter amount, choose
-   dry/cooked/units, pick meal, save.
-3. **Pantry** — list, search, add (photo or manual), edit, archive.
+   grouped by meal, tap an entry to delete.
+2. **Log** — pick food (search), enter amount, choose dry/cooked/units, pick
+   meal, save.
+3. **Pantry** — list, filter, add, edit, delete.
 
 Six tabs is tight on a phone; shorten "Program" to "Prog" if it doesn't fit.
 
 ## Testing
 
-**This project has no test framework** — no `package.json` in `runlog-app`, no
-tests in `runlog-auth`. Rather than introduce build tooling unasked:
+**This project has no test framework** — no `package.json` in `runlog-app`.
+Rather than introduce build tooling unasked:
 
-- `resolveGrams()`, `computeMacros()`, and `validateMacroPanel()` are written as
-  pure functions with no DOM or IndexedDB access.
-- A `?selftest=1` URL flag runs ~20 assertions against them and reports results
-  in-page. Zero dependencies, consistent with the project's style.
-- Endpoint verified by `curl` against real label photos plus the unreadable,
-  oversized, and missing-key cases.
+- `resolveGrams()`, `computeMacros()`, `validateMacroPanel()`, `sumMacros()`,
+  and `buildEntry()` are written as pure functions with no DOM or IndexedDB
+  access.
+- A `?selftest=1` URL flag runs the assertions and reports results in-page.
+  Zero dependencies, consistent with the project's style. Storage round-trips
+  and the built-in food table are covered by async assertions in the same
+  harness — every one of the 80 built-in panels is validated on each run, so a
+  typo in that table fails the suite rather than silently corrupting logs.
 
-Manual verification before shipping: add a food by photo, add one manually, log
-a dry-weight meal, log a cooked-weight meal, log a unit-based food, confirm
-totals, confirm both JSON files land in `runlog-data`, reload and confirm
-persistence.
+Manual verification before shipping: add a food, log a dry-weight meal, log a
+cooked-weight meal, log a unit-based food (eggs), confirm totals, confirm both
+JSON files land in `runlog-data`, reload and confirm persistence, and confirm
+existing sessions/VO2/program data survived the v4→v5 upgrade.
 
 ## Risks
 
 - **~1,100 lines added to a 7,662-line file.** Accepted for update-mechanism
   consistency. If the file becomes unmanageable, extract CSS first — it's 1,575
   lines and has no coupling to the update check.
-- **`ALLOWED_ORIGIN` currently defaults to `*`.** Should be pinned to
-  `https://emimy.github.io` before adding another endpoint. Tracked separately.
-- **Label formats vary by country** (per-serving vs per-100g, kJ vs kcal). The
-  prompt must instruct normalisation to per-100 g kcal, and the sanity check is
-  the backstop when it goes wrong.
+- **Label formats vary by country** (per-serving vs per-100 g, kJ vs kcal).
+  Reading the wrong column is the most likely real-world error and the sanity
+  check cannot detect it. If kJ is all that's printed, divide by 4.184.
+- **`ALLOWED_ORIGIN` in `runlog-auth` defaults to `*`.** Pre-existing, unrelated
+  to this feature, still worth pinning to `https://emimy.github.io`.
