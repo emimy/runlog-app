@@ -7497,6 +7497,61 @@ async function runSelfTests() {
       'all built-ins seeded (' + afterFirst + ' of ' + BUILTIN_FOODS.length + ')');
   })());
 
+  _selfTestAsync.push((async () => {
+    await openDB();
+    setFoodMode('pantry');
+    await renderFoodPantry();
+
+    // A category default should populate the cooked factor for a new food.
+    openPantryForm(null, { name: 'Test Prefill Pasta', category: 'pasta',
+      per100g: { kcal: 352, protein: 12.5, carbs: 71.2, fat: 1.5 } });
+    assert(document.getElementById('pf-name').value === 'Test Prefill Pasta',
+      'form populates the name field');
+    assertClose(parseFloat(document.getElementById('pf-kcal').value), 352, 0.01,
+      'form populates kcal');
+    assertClose(parseFloat(document.getElementById('pf-cooked').value), 2.4, 0.01,
+      'form applies the category cooked factor');
+    const good = readPantryForm();
+    assert(good.item && good.item.name === 'Test Prefill Pasta',
+      'readPantryForm returns the edited item');
+    assert(good.issues.length === 0, 'a coherent panel produces no issues');
+    assert(good.item.id.indexOf('pnt_') === 0, 'a new food gets a pnt_ id');
+
+    // Missing name is a hard reject, not a warning.
+    document.getElementById('pf-name').value = '';
+    assert(readPantryForm().item === null, 'missing name is rejected outright');
+
+    // Incoherent numbers are saveable but flagged.
+    document.getElementById('pf-name').value = 'Nonsense';
+    document.getElementById('pf-kcal').value = '100';
+    document.getElementById('pf-protein').value = '50';
+    document.getElementById('pf-carbs').value = '50';
+    document.getElementById('pf-fat').value = '50';
+    const sus = readPantryForm();
+    assert(sus.item !== null, 'incoherent numbers still produce an item');
+    assert(sus.issues.length > 0, 'incoherent numbers are flagged');
+
+    // A missing macro is a hard reject.
+    document.getElementById('pf-fat').value = '';
+    assert(readPantryForm().item === null, 'missing macro is rejected outright');
+
+    // Comma decimals must survive — a European keyboard produces "1,5", and a
+    // type=number input would silently blank it. The fields are type=text with
+    // parseNum(), matching the convention already used by #speed.
+    document.getElementById('pf-name').value    = 'Comma Test';
+    document.getElementById('pf-kcal').value    = '359';
+    document.getElementById('pf-protein').value = '12';
+    document.getElementById('pf-carbs').value   = '72';
+    document.getElementById('pf-fat').value     = '1,5';
+    document.getElementById('pf-cooked').value  = '2,4';
+    const comma = readPantryForm();
+    assert(comma.item !== null, 'comma decimal does not blank the field');
+    assertClose(comma.item.per100g.fat, 1.5, 0.001, 'comma decimal parsed as 1.5');
+    assertClose(comma.item.cookedFactor, 2.4, 0.001, 'comma cooked factor parsed as 2.4');
+
+    document.getElementById('pf-cancel').click();
+  })());
+
   count += _selfTestAsync.length;
   await Promise.all(_selfTestAsync);
 
@@ -7939,7 +7994,8 @@ async function renderFoodLog() {
       '<div class="log-mode-toggle food-mode-toggle" id="fl-modes"></div>' +
       '<div class="field">' +
         '<label for="fl-amount" id="fl-amount-label">Amount (g)</label>' +
-        '<input type="number" id="fl-amount" inputmode="decimal" step="any" min="0" placeholder="120">' +
+        '<input type="text" id="fl-amount" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" ' +
+          'autocomplete="off" placeholder="120">' +
       '</div>' +
       '<div class="field">' +
         '<label for="fl-meal">Meal</label>' +
@@ -8008,8 +8064,8 @@ async function renderFoodLog() {
 
   function updatePreview() {
     const prev = document.getElementById('fl-preview');
-    const amt = parseFloat(document.getElementById('fl-amount').value);
-    if (!_logSelectedFood || isNaN(amt)) { prev.textContent = ''; return; }
+    const amt = parseNum(document.getElementById('fl-amount').value);
+    if (!_logSelectedFood || amt === null) { prev.textContent = ''; return; }
     const g = resolveGrams(_logSelectedFood, amt, currentMode());
     const m = g === null ? null : computeMacros(_logSelectedFood, g);
     prev.textContent = m
@@ -8022,7 +8078,7 @@ async function renderFoodLog() {
   document.getElementById('fl-amount').addEventListener('input', updatePreview);
 
   document.getElementById('fl-save').addEventListener('click', async () => {
-    const amt = parseFloat(document.getElementById('fl-amount').value);
+    const amt = parseNum(document.getElementById('fl-amount').value);
     const entry = buildEntry(_logSelectedFood, amt, currentMode(),
       document.getElementById('fl-meal').value, todayISO());
     if (!entry) { toast('Enter a valid amount', true); return; }
@@ -8037,8 +8093,162 @@ async function renderFoodLog() {
   renderResults('');
 }
 
-// Implemented in a later task; stub keeps the rest testable alone.
-async function renderFoodPantry() {}
+async function renderFoodPantry() {
+  const el = document.getElementById('food-pantry');
+  const pantry = (await getAllPantry())
+    .filter(p => !p.archived)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  el.innerHTML =
+    '<div class="pantry-actions">' +
+      '<button class="primary" id="pf-add-manual">+ Add a food</button>' +
+    '</div>' +
+    '<div id="pf-form-wrap" style="display:none"></div>' +
+    '<div class="field"><input type="text" id="pf-filter" placeholder="Filter…" ' +
+      'autocomplete="off" autocapitalize="off" spellcheck="false"></div>' +
+    '<div id="pf-list"></div>';
+
+  function drawList(q) {
+    const needle = (q || '').trim().toLowerCase();
+    const hits = needle ? pantry.filter(p => p.name.toLowerCase().includes(needle)) : pantry;
+    document.getElementById('pf-list').innerHTML = hits.map(p =>
+      '<div class="food-entry" data-pid="' + p.id + '">' +
+      '<div><div class="fe-name">' + escapeHtml(p.name) + '</div>' +
+      '<div class="fe-sub">' + escapeHtml(p.category) +
+        (p.unit ? ' · 1 ' + escapeHtml(p.unit.label) + ' = ' + p.unit.grams + 'g' : '') +
+        (p.cookedFactor ? ' · ×' + p.cookedFactor + ' cooked' : '') +
+      '</div></div>' +
+      '<div class="fe-macros">' + Math.round(p.per100g.kcal) + ' kcal<br>' +
+      '<span style="opacity:.6">' + p.per100g.protein + 'g P</span></div>' +
+      '</div>').join('') || '<div class="fl-empty">No foods match.</div>';
+    document.getElementById('pf-list').querySelectorAll('.food-entry').forEach(row => {
+      row.addEventListener('click', () =>
+        openPantryForm(pantry.find(p => p.id === row.dataset.pid), null));
+    });
+  }
+
+  document.getElementById('pf-filter').addEventListener('input', e => drawList(e.target.value));
+  document.getElementById('pf-add-manual').addEventListener('click', () => openPantryForm(null, null));
+  drawList('');
+}
+
+// The single write path into the pantry. `item` edits an existing food.
+// `prefill` seeds a new one from an external source — unused today, kept as
+// the seam a future photo or barcode feature would plug into. Both may be
+// null for a blank entry.
+function openPantryForm(item, prefill) {
+  const wrap = document.getElementById('pf-form-wrap');
+  const src = item || prefill || {};
+  const p = src.per100g || {};
+  const cat = src.category || 'other';
+  const cooked = item ? item.cookedFactor : (COOKED_FACTORS[cat] ?? null);
+  const flagged = prefill && prefill._issues && prefill._issues.length;
+
+  wrap.style.display = '';
+  wrap.innerHTML =
+    (flagged ? '<div class="pf-warn">These numbers looked inconsistent ' +
+      '(' + prefill._issues.join(', ') + '). Please check them.</div>' : '') +
+    '<div class="field"><label for="pf-name">Name</label>' +
+      '<input type="text" id="pf-name" value="' + escapeHtml(src.name || '') + '"></div>' +
+    '<div class="field"><label for="pf-category">Category</label><select id="pf-category">' +
+      Object.keys(COOKED_FACTORS).map(c =>
+        '<option value="' + c + '"' + (c === cat ? ' selected' : '') + '>' + c + '</option>').join('') +
+    '</select></div>' +
+    '<div class="pf-grid">' +
+      pfNum('pf-kcal', 'kcal /100g', p.kcal) +
+      pfNum('pf-protein', 'Protein g', p.protein) +
+      pfNum('pf-carbs', 'Carbs g', p.carbs) +
+      pfNum('pf-fat', 'Fat g', p.fat) +
+    '</div>' +
+    '<div class="pf-grid">' +
+      pfNum('pf-cooked', 'Cooked factor', cooked) +
+      pfNum('pf-unitgrams', 'Unit weight g', item && item.unit ? item.unit.grams : null) +
+    '</div>' +
+    '<div class="field"><label for="pf-unitlabel">Unit name (e.g. egg, scoop)</label>' +
+      '<input type="text" id="pf-unitlabel" value="' +
+      escapeHtml(item && item.unit ? item.unit.label : '') + '"></div>' +
+    '<button class="primary" id="pf-save">Save food</button>' +
+    '<div class="btn-spacer"></div>' +
+    '<button id="pf-cancel">Cancel</button>' +
+    (item ? '<div class="btn-spacer"></div><button id="pf-delete">Delete this food</button>' : '');
+
+  wrap.dataset.editingId = item ? item.id : '';
+
+  document.getElementById('pf-cancel').addEventListener('click', () => {
+    wrap.style.display = 'none'; wrap.innerHTML = '';
+  });
+  document.getElementById('pf-save').addEventListener('click', async () => {
+    const { item: built, issues } = readPantryForm();
+    if (!built) { toast(issues[0] || 'Check the values', true); return; }
+    if (issues.length && !confirm(
+        'These numbers don\'t quite add up (' + issues.join(', ') +
+        '). Save anyway?')) return;
+    await putPantryItem(built);
+    toast('Saved ' + built.name);
+    wrap.style.display = 'none'; wrap.innerHTML = '';
+    renderFoodPantry();
+    pantrySyncToGh().catch(e => console.warn('[pantry sync]', e));
+  });
+  const del = document.getElementById('pf-delete');
+  if (del) del.addEventListener('click', async () => {
+    if (!confirm('Delete this food? Meals you already logged keep their own copy of the numbers.')) return;
+    await deletePantryItem(item.id);
+    toast('Deleted');
+    wrap.style.display = 'none'; wrap.innerHTML = '';
+    renderFoodPantry();
+    pantrySyncToGh().catch(e => console.warn('[pantry sync]', e));
+  });
+}
+
+// Numeric field following the project's existing convention (see #speed at
+// index.html:1744): type=text with inputmode=decimal and a pattern that
+// accepts both '.' and ',', parsed through parseNum(). A type=number input
+// silently blanks itself when a comma decimal is typed, which on a European
+// keyboard would show a confusing "required" error on a filled-in field.
+function pfNum(id, label, val) {
+  return '<div class="field"><label for="' + id + '">' + label + '</label>' +
+    '<input type="text" id="' + id + '" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" ' +
+    'autocomplete="off" value="' +
+    (val === null || val === undefined ? '' : val) + '"></div>';
+}
+
+// Read and validate the pantry form. Returns {item, issues}; item is null
+// when the input is unusable, non-empty issues means "suspicious but saveable".
+function readPantryForm() {
+  const wrap = document.getElementById('pf-form-wrap');
+  const num = id => parseNum(document.getElementById(id).value);
+  const name = document.getElementById('pf-name').value.trim();
+  const per100g = {
+    kcal: num('pf-kcal'), protein: num('pf-protein'),
+    carbs: num('pf-carbs'), fat: num('pf-fat'),
+  };
+  if (!name) return { item: null, issues: ['Name is required'] };
+  for (const k of ['kcal', 'protein', 'carbs', 'fat']) {
+    if (per100g[k] === null) return { item: null, issues: [k + ' is required'] };
+    if (per100g[k] < 0) return { item: null, issues: [k + ' cannot be negative'] };
+  }
+  const unitLabel = document.getElementById('pf-unitlabel').value.trim();
+  const unitGrams = num('pf-unitgrams');
+  const editingId = wrap.dataset.editingId;
+  const now = new Date().toISOString();
+  const v = validateMacroPanel(per100g);
+
+  return {
+    item: {
+      id: editingId || ('pnt_' + uid()),
+      name,
+      category: document.getElementById('pf-category').value,
+      per100g,
+      unit: (unitLabel && unitGrams) ? { label: unitLabel, grams: unitGrams } : null,
+      cookedFactor: num('pf-cooked'),
+      source: 'manual',
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+    },
+    issues: v.ok ? [] : v.issues,
+  };
+}
 async function nutritionSyncToGh() { return { ok: true }; }
 async function pantrySyncToGh() { return { ok: true }; }
 
