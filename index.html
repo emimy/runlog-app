@@ -1583,6 +1583,72 @@
     height: 10px;
     border-radius: 2px;
   }
+    /* ---- Nutrition ---- */
+    /* The shared .log-mode-toggle grid is hardcoded to two columns; Food has
+       three panes, so it gets its own column count. Buttons mirror
+       .history-mode-btn so the tab feels native to the rest of the app. */
+    .food-mode-toggle { grid-template-columns: 1fr 1fr 1fr; }
+    .food-mode-btn {
+      padding: 14px 8px;
+      background: var(--surface);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .food-mode-btn.active {
+      background: rgba(74, 222, 128, 0.15);
+      color: #86efac;
+      border-color: rgba(74, 222, 128, 0.5);
+    }
+    .food-pane { padding: 0 4px; }
+    .macro-ring { display: flex; gap: 12px; margin: 12px 0 12px; }
+    .macro-card {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px; text-align: center;
+    }
+    .macro-card .val { font-size: 22px; font-weight: 700; }
+    .macro-card .lbl { font-size: 11px; opacity: .6; text-transform: uppercase; letter-spacing: .5px; }
+    .macro-card .tgt { font-size: 11px; opacity: .5; margin-top: 2px; }
+    .macro-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.12); margin-top: 8px; overflow: hidden; }
+    .macro-bar > span { display: block; height: 100%; background: var(--accent); transition: width .25s; }
+    .macro-bar.over > span { background: var(--danger); }
+    .meal-group { margin-bottom: 16px; }
+    .meal-group h4 {
+      font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
+      opacity: .55; margin: 0 0 6px 2px;
+    }
+    .food-entry {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 9px 11px; background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 9px; margin-bottom: 5px; cursor: pointer;
+    }
+    .food-entry .fe-name { font-size: 14px; }
+    .food-entry .fe-sub { font-size: 11px; opacity: .55; margin-top: 1px; }
+    .food-entry .fe-macros { font-size: 12px; text-align: right; white-space: nowrap; }
+    .fl-results { margin-top: 6px; }
+    .fl-hit {
+      display: flex; justify-content: space-between; align-items: center; width: 100%;
+      text-align: left; padding: 9px 11px; margin-bottom: 4px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; color: inherit; font-size: 14px; cursor: pointer;
+    }
+    .fl-hit-sub { font-size: 11px; opacity: .5; }
+    .fl-empty { padding: 10px; font-size: 13px; opacity: .55; }
+    .fl-chosen { font-size: 17px; font-weight: 600; margin: 10px 0 8px 2px; }
+    .fl-preview { font-size: 13px; opacity: .7; margin: 10px 0 14px 2px; min-height: 18px; }
+    .pantry-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+    .pantry-actions button { flex: 1; }
+    .pf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .pf-warn {
+      background: rgba(239,68,68,.14); border: 1px solid rgba(239,68,68,.35);
+      border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 12px;
+    }
 </style>
 </head>
 <body>
@@ -1593,8 +1659,9 @@
 
 <nav class="tabs">
   <button class="tab active" data-view="log">Log</button>
+  <button class="tab" data-view="food">Food</button>
   <button class="tab" data-view="analyze">Analyze</button>
-  <button class="tab" data-view="program">Program</button>
+  <button class="tab" data-view="program">Prog</button>
   <button class="tab" data-view="list">History</button>
   <button class="tab" data-view="settings">Sync</button>
 </nav>
@@ -1991,6 +2058,18 @@
     <div class="empty-analyze" id="analyze-empty" style="display:none">
       No sessions yet with Whoop data. Log some runs and come back.
     </div>
+  </section>
+
+  <!-- FOOD VIEW -->
+  <section class="view" id="view-food">
+    <div class="log-mode-toggle food-mode-toggle">
+      <button type="button" class="food-mode-btn active" data-fmode="today">Today</button>
+      <button type="button" class="food-mode-btn" data-fmode="log">Log</button>
+      <button type="button" class="food-mode-btn" data-fmode="pantry">Pantry</button>
+    </div>
+    <div id="food-today" class="food-pane"></div>
+    <div id="food-log" class="food-pane" style="display:none"></div>
+    <div id="food-pantry" class="food-pane" style="display:none"></div>
   </section>
 </main>
 
@@ -2831,6 +2910,7 @@ document.querySelectorAll('.tab').forEach(tab => {
       // Reset to default (Runs) every time the History tab opens
       setHistoryMode('run');
     }
+    if (tab.dataset.view === 'food') setFoodMode('today');
     if (tab.dataset.view === 'settings') renderSettings();
     if (tab.dataset.view === 'analyze') renderAnalyze();
     if (tab.dataset.view === 'log') loadStrengthLastTimeCache();
@@ -7324,6 +7404,22 @@ async function runSelfTests() {
       'nutrition entry deletes');
   })());
 
+  t(() => {
+    const sum = sumMacros([
+      { macros: { kcal: 100, protein: 10, carbs: 5, fat: 2 } },
+      { macros: { kcal: 250.5, protein: 20.2, carbs: 30, fat: 8 } },
+    ]);
+    assertClose(sum.kcal, 350.5, 0.01, 'sumMacros totals kcal');
+    assertClose(sum.protein, 30.2, 0.01, 'sumMacros totals protein');
+  });
+  t(() => {
+    const z = sumMacros([]);
+    assert(z.kcal === 0 && z.protein === 0, 'sumMacros of empty list is all zeros');
+  });
+  t(() => assert(DAILY_KCAL_TARGET === 2500 && DAILY_PROTEIN_TARGET === 170,
+    'daily targets are 2500 kcal / 170g protein'));
+  t(() => assert(/^\d{4}-\d{2}-\d{2}$/.test(todayISO()), 'todayISO returns YYYY-MM-DD'));
+
   _selfTestAsync.push((async () => {
     await openDB();
     assert(BUILTIN_FOODS.length >= 60, 'built-in table has at least 60 foods');
@@ -7624,6 +7720,131 @@ async function seedBuiltinFoods() {
   await setConfig('builtinSeedVersion', BUILTIN_SEED_VERSION);
   return inserted;
 }
+
+// ============================================================
+// Nutrition — UI
+// Three panes behind one tab: Today (totals), Log (add an entry),
+// Pantry (manage foods).
+// ============================================================
+
+const DAILY_KCAL_TARGET = 2500;
+const DAILY_PROTEIN_TARGET = 170;
+
+const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
+
+function todayISO() {
+  const d = new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
+function sumMacros(entries) {
+  const out = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  for (const e of entries) {
+    if (!e || !e.macros) continue;
+    out.kcal    += e.macros.kcal    || 0;
+    out.protein += e.macros.protein || 0;
+    out.carbs   += e.macros.carbs   || 0;
+    out.fat     += e.macros.fat     || 0;
+  }
+  for (const k of Object.keys(out)) out[k] = round1(out[k]);
+  return out;
+}
+
+// Minimal HTML escape for user-supplied food names.
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function setFoodMode(mode) {
+  document.querySelectorAll('.food-mode-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.fmode === mode));
+  document.getElementById('food-today').style.display  = mode === 'today'  ? '' : 'none';
+  document.getElementById('food-log').style.display    = mode === 'log'    ? '' : 'none';
+  document.getElementById('food-pantry').style.display = mode === 'pantry' ? '' : 'none';
+  if (mode === 'today')  renderFoodToday();
+  if (mode === 'log')    renderFoodLog();
+  if (mode === 'pantry') renderFoodPantry();
+}
+
+document.querySelectorAll('.food-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => setFoodMode(btn.dataset.fmode));
+});
+
+function macroCard(label, value, target, unit) {
+  const pct = target ? Math.min(100, (value / target) * 100) : 0;
+  const over = target && value > target;
+  return '<div class="macro-card">' +
+    '<div class="val">' + Math.round(value) + '</div>' +
+    '<div class="lbl">' + label + '</div>' +
+    (target
+      ? '<div class="tgt">of ' + target + unit + '</div>' +
+        '<div class="macro-bar' + (over ? ' over' : '') + '"><span style="width:' + pct + '%"></span></div>'
+      : '<div class="tgt">' + unit + '</div>') +
+    '</div>';
+}
+
+async function renderFoodToday() {
+  const el = document.getElementById('food-today');
+  const entries = await getNutritionByDate(todayISO());
+  const total = sumMacros(entries);
+
+  let html = '<div class="macro-ring">' +
+    macroCard('kcal', total.kcal, DAILY_KCAL_TARGET, '') +
+    macroCard('protein', total.protein, DAILY_PROTEIN_TARGET, 'g') +
+    '</div>' +
+    '<div class="macro-ring">' +
+    macroCard('carbs', total.carbs, null, 'g') +
+    macroCard('fat', total.fat, null, 'g') +
+    '</div>';
+
+  if (entries.length === 0) {
+    html += '<div class="empty-state"><div class="icon">🍽️</div>' +
+      '<div>Nothing logged today.</div></div>';
+  } else {
+    for (const meal of MEALS) {
+      const forMeal = entries.filter(e => e.meal === meal)
+        .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+      if (!forMeal.length) continue;
+      const m = sumMacros(forMeal);
+      html += '<div class="meal-group"><h4>' + meal + ' — ' +
+        Math.round(m.kcal) + ' kcal, ' + Math.round(m.protein) + 'g P</h4>';
+      for (const e of forMeal) {
+        const amt = e.mode === 'units'
+          ? e.amount + '×'
+          : Math.round(e.amount) + 'g ' + e.mode;
+        html += '<div class="food-entry" data-entry-id="' + e.id + '">' +
+          '<div><div class="fe-name">' + escapeHtml(e.foodName) + '</div>' +
+          '<div class="fe-sub">' + amt + '</div></div>' +
+          '<div class="fe-macros">' + Math.round(e.macros.kcal) + ' kcal<br>' +
+          '<span style="opacity:.6">' + Math.round(e.macros.protein) + 'g P</span></div>' +
+          '</div>';
+      }
+      html += '</div>';
+    }
+  }
+  el.innerHTML = html;
+
+  // Tap an entry to delete it (with confirm).
+  el.querySelectorAll('.food-entry').forEach(row => {
+    row.addEventListener('click', async () => {
+      if (!confirm('Delete this entry?')) return;
+      await deleteNutritionEntry(row.dataset.entryId);
+      toast('Entry deleted');
+      renderFoodToday();
+      nutritionSyncToGh().catch(e => console.warn('[nutrition sync]', e));
+    });
+  });
+}
+
+// Implemented in later tasks; stubs keep the Today pane testable alone.
+async function renderFoodLog() {}
+async function renderFoodPantry() {}
+async function nutritionSyncToGh() { return { ok: true }; }
+async function pantrySyncToGh() { return { ok: true }; }
 
 // Run on ?selftest=1 and render results instead of the normal app.
 if (new URLSearchParams(location.search).get('selftest') === '1') {
@@ -8053,6 +8274,13 @@ async function updateCount() {
     await openDB();
     await loadGhConfig();
     await loadWhoopTokens();
+
+    // Seed the built-in food table on first run (and after a version bump,
+    // which only adds new entries — never clobbers edits to existing ones).
+    if ((await getConfig('builtinSeedVersion')) !== BUILTIN_SEED_VERSION) {
+      const n = await seedBuiltinFoods();
+      if (n > 0) console.log('[nutrition] seeded ' + n + ' built-in foods');
+    }
 
     // VO2: first run a one-time migration from the old 7-entry monthly seed to
     // the new 57-entry weekly seed. This is a no-op for anyone whose store is
