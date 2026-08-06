@@ -2030,11 +2030,13 @@ const APP_VERSION = '2026-06-29-45';
 // IndexedDB setup
 // ============================================================
 const DB_NAME = 'runlog-db';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const STORE = 'sessions';
 const CONFIG_STORE = 'config';
 const VO2_STORE = 'vo2max';
 const PROGRAM_COMPLETION_STORE = 'program_completion';
+const PANTRY_STORE = 'pantry';
+const NUTRITION_STORE = 'nutrition';
 let db;
 
 function openDB() {
@@ -2058,6 +2060,18 @@ function openDB() {
         // Keyed by "WEEK-DOW" (e.g. "5-Monday").
         // Value schema: { key, week, dow, completed, completedAt }
         d.createObjectStore(PROGRAM_COMPLETION_STORE, { keyPath: 'key' });
+      }
+      if (!d.objectStoreNames.contains(PANTRY_STORE)) {
+        // Foods available to log. Seeded with BUILTIN_FOODS on first run,
+        // then grown by photo or manual entry.
+        const ps = d.createObjectStore(PANTRY_STORE, { keyPath: 'id' });
+        ps.createIndex('name', 'name', { unique: false });
+      }
+      if (!d.objectStoreNames.contains(NUTRITION_STORE)) {
+        // One record per food per meal. Macros are snapshotted at log time
+        // so later pantry edits never rewrite history.
+        const ns = d.createObjectStore(NUTRITION_STORE, { keyPath: 'id' });
+        ns.createIndex('date', 'date', { unique: false });
       }
     };
     req.onsuccess = () => { db = req.result; resolve(db); };
@@ -7265,10 +7279,77 @@ async function runSelfTests() {
     'non-numeric macro rejected'));
   t(() => assert(!validateMacroPanel(null).ok, 'null panel rejected'));
 
+  // Storage round-trip. Async, so it appends to a promise the harness awaits.
+  _selfTestAsync.push((async () => {
+    await openDB();
+    const probe = {
+      id: 'pnt_selftest', name: 'Self Test Food', category: 'other',
+      per100g: { kcal: 100, protein: 10, carbs: 10, fat: 2 },
+      unit: null, cookedFactor: null, source: 'manual',
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      archived: false,
+    };
+    await putPantryItem(probe);
+    const back = await getPantryItem('pnt_selftest');
+    assert(back && back.name === 'Self Test Food', 'pantry item round-trips');
+    await deletePantryItem('pnt_selftest');
+    assert(!(await getPantryItem('pnt_selftest')), 'pantry item deletes');
+
+    const entry = {
+      id: 'ent_selftest', date: '1999-12-31', meal: 'lunch',
+      foodId: 'pnt_selftest', foodName: 'Self Test Food',
+      amount: 100, mode: 'dry', grams: 100,
+      macros: { kcal: 100, protein: 10, carbs: 10, fat: 2 },
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+    await putNutritionEntry(entry);
+    const byDate = await getNutritionByDate('1999-12-31');
+    assert(byDate.length === 1 && byDate[0].id === 'ent_selftest',
+      'nutrition entry retrievable by date index');
+    assert((await getNutritionByDate('1999-12-30')).length === 0,
+      'date index does not leak across dates');
+    await deleteNutritionEntry('ent_selftest');
+    assert((await getNutritionByDate('1999-12-31')).length === 0,
+      'nutrition entry deletes');
+  })());
+
   count += _selfTestAsync.length;
   await Promise.all(_selfTestAsync);
 
   return { count, failures: _selfTestFailures };
+}
+
+// ============================================================
+// Nutrition — storage
+// Pantry (foods) and nutrition (log entries) stores. Same
+// promise-wrapped IndexedDB style as the sessions/vo2max helpers above.
+// ============================================================
+
+function pantryTx(mode = 'readonly') {
+  return db.transaction(PANTRY_STORE, mode).objectStore(PANTRY_STORE);
+}
+function nutTx(mode = 'readonly') {
+  return db.transaction(NUTRITION_STORE, mode).objectStore(NUTRITION_STORE);
+}
+
+function _req(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function putPantryItem(item)  { return _req(pantryTx('readwrite').put(item)).then(() => {}); }
+function getPantryItem(id)    { return _req(pantryTx().get(id)); }
+function getAllPantry()       { return _req(pantryTx().getAll()); }
+function deletePantryItem(id) { return _req(pantryTx('readwrite').delete(id)).then(() => {}); }
+
+function putNutritionEntry(e)     { return _req(nutTx('readwrite').put(e)).then(() => {}); }
+function getAllNutrition()        { return _req(nutTx().getAll()); }
+function deleteNutritionEntry(id) { return _req(nutTx('readwrite').delete(id)).then(() => {}); }
+
+function getNutritionByDate(date) {
+  return _req(nutTx().index('date').getAll(IDBKeyRange.only(date)));
 }
 
 // --- math ----------------------------------------------------------------
