@@ -7420,6 +7420,55 @@ async function runSelfTests() {
     'daily targets are 2500 kcal / 170g protein'));
   t(() => assert(/^\d{4}-\d{2}-\d{2}$/.test(todayISO()), 'todayISO returns YYYY-MM-DD'));
 
+  t(() => {
+    assert(plural('egg') === 'eggs', 'plural adds -s');
+    assert(plural('slice') === 'slices', 'plural adds -s to -e words');
+    assert(plural('dash') === 'dashes', 'plural adds -es after sh');
+    assert(plural('glass') === 'glasses', 'plural adds -es after s');
+    assert(plural('') === '', 'plural of empty string is empty');
+  });
+
+  t(() => {
+    const item = {
+      id: 'pnt_x', name: 'Penne', category: 'pasta',
+      per100g: { kcal: 352, protein: 12.5, carbs: 71.2, fat: 1.5 },
+      cookedFactor: 2.4, unit: null,
+    };
+    const e = buildEntry(item, 120, 'dry', 'lunch', '2026-08-06');
+    assert(e !== null, 'buildEntry returns an entry for valid input');
+    assert(e.foodId === 'pnt_x' && e.foodName === 'Penne', 'entry snapshots food identity');
+    assert(e.grams === 120, 'entry records resolved grams');
+    assertClose(e.macros.kcal, 422.4, 0.05, 'entry macros computed');
+    assert(e.date === '2026-08-06' && e.meal === 'lunch', 'entry records date and meal');
+    assert(typeof e.id === 'string' && e.id.indexOf('ent_') === 0, 'entry has an ent_ id');
+    assert(!('syncState' in e), 'entry has no syncState (whole-file sync model)');
+  });
+  t(() => {
+    const item = { id: 'p', name: 'Penne',
+      per100g: { kcal: 352, protein: 12.5, carbs: 71.2, fat: 1.5 },
+      cookedFactor: 2.4, unit: null };
+    assert(buildEntry(item, -1, 'dry', 'lunch', '2026-08-06') === null,
+      'buildEntry rejects negative amount');
+    assert(buildEntry(item, 100, 'units', 'lunch', '2026-08-06') === null,
+      'buildEntry rejects units mode without a unit');
+    assert(buildEntry(item, 100, 'dry', 'brunch', '2026-08-06') === null,
+      'buildEntry rejects an unknown meal');
+    assert(buildEntry(item, 100, 'dry', 'lunch', 'not-a-date') === null,
+      'buildEntry rejects a malformed date');
+  });
+  // A cooked-weight entry must land on the same macros as its dry equivalent.
+  t(() => {
+    const item = { id: 'p', name: 'Penne',
+      per100g: { kcal: 352, protein: 12.5, carbs: 71.2, fat: 1.5 },
+      cookedFactor: 2.4, unit: null };
+    const dry    = buildEntry(item, 120, 'dry', 'lunch', '2026-08-06');
+    const cooked = buildEntry(item, 288, 'cooked', 'lunch', '2026-08-06');
+    assertClose(cooked.macros.kcal, dry.macros.kcal, 0.05,
+      '288g cooked equals 120g dry in kcal');
+    assertClose(cooked.macros.protein, dry.macros.protein, 0.05,
+      '288g cooked equals 120g dry in protein');
+  });
+
   _selfTestAsync.push((async () => {
     await openDB();
     assert(BUILTIN_FOODS.length >= 60, 'built-in table has at least 60 foods');
@@ -7840,8 +7889,155 @@ async function renderFoodToday() {
   });
 }
 
-// Implemented in later tasks; stubs keep the Today pane testable alone.
-async function renderFoodLog() {}
+// Build a log entry from a pantry item and user input. Pure — no storage,
+// no DOM — so the resolve/compute/snapshot chain is covered by self-tests.
+// Returns null on any invalid input rather than writing a bad record.
+function buildEntry(item, amount, mode, meal, date) {
+  if (!item || !MEALS.includes(meal)) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return null;
+  const grams = resolveGrams(item, amount, mode);
+  if (grams === null) return null;
+  const macros = computeMacros(item, grams);
+  if (macros === null) return null;
+  return {
+    id: 'ent_' + uid(),
+    date, meal,
+    foodId: item.id,
+    foodName: item.name,
+    amount, mode,
+    grams: round1(grams),
+    macros,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+// Naive pluraliser for unit labels ("egg" -> "eggs", "slice" -> "slices").
+// Only ever sees short nouns the user typed as a unit name, so the -s/-es
+// rule is enough; no need for a word list.
+function plural(word) {
+  if (!word) return '';
+  return /(s|x|z|ch|sh)$/i.test(word) ? word + 'es' : word + 's';
+}
+
+let _logSelectedFood = null;
+
+async function renderFoodLog() {
+  const el = document.getElementById('food-log');
+  const pantry = (await getAllPantry())
+    .filter(p => !p.archived)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  el.innerHTML =
+    '<div class="field">' +
+      '<label for="fl-search">Food</label>' +
+      '<input type="text" id="fl-search" placeholder="Search your pantry…" ' +
+        'autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">' +
+      '<div id="fl-results" class="fl-results"></div>' +
+    '</div>' +
+    '<div id="fl-form" style="display:none">' +
+      '<div class="fl-chosen" id="fl-chosen"></div>' +
+      '<div class="log-mode-toggle food-mode-toggle" id="fl-modes"></div>' +
+      '<div class="field">' +
+        '<label for="fl-amount" id="fl-amount-label">Amount (g)</label>' +
+        '<input type="number" id="fl-amount" inputmode="decimal" step="any" min="0" placeholder="120">' +
+      '</div>' +
+      '<div class="field">' +
+        '<label for="fl-meal">Meal</label>' +
+        '<select id="fl-meal">' +
+          MEALS.map(m => '<option value="' + m + '">' + m + '</option>').join('') +
+        '</select>' +
+      '</div>' +
+      '<div class="fl-preview" id="fl-preview"></div>' +
+      '<button class="primary" id="fl-save">Add to today</button>' +
+    '</div>';
+
+  const search  = document.getElementById('fl-search');
+  const results = document.getElementById('fl-results');
+  const form    = document.getElementById('fl-form');
+
+  function renderResults(q) {
+    const needle = q.trim().toLowerCase();
+    const hits = needle
+      ? pantry.filter(p => p.name.toLowerCase().includes(needle)).slice(0, 12)
+      : pantry.slice(0, 12);
+    results.innerHTML = hits.map(p =>
+      '<button type="button" class="fl-hit" data-id="' + p.id + '">' +
+      escapeHtml(p.name) +
+      '<span class="fl-hit-sub">' + Math.round(p.per100g.kcal) + ' kcal / 100g</span>' +
+      '</button>').join('') ||
+      '<div class="fl-empty">No match. Add it in the Pantry tab.</div>';
+    results.querySelectorAll('.fl-hit').forEach(b => {
+      b.addEventListener('click', () => selectFood(pantry.find(p => p.id === b.dataset.id)));
+    });
+  }
+
+  function selectFood(item) {
+    _logSelectedFood = item;
+    document.getElementById('fl-chosen').textContent = item.name;
+    results.innerHTML = '';
+    search.value = '';
+    form.style.display = '';
+
+    // Only offer modes this food actually supports.
+    const modes = [{ k: 'dry', label: item.cookedFactor ? 'Dry' : 'Weight' }];
+    if (item.cookedFactor) modes.push({ k: 'cooked', label: 'Cooked' });
+    if (item.unit) modes.push({ k: 'units', label: item.unit.label });
+    const box = document.getElementById('fl-modes');
+    box.style.gridTemplateColumns = 'repeat(' + modes.length + ', 1fr)';
+    box.innerHTML = modes.map((m, i) =>
+      '<button type="button" class="food-mode-btn' + (i === 0 ? ' active' : '') +
+      '" data-lmode="' + m.k + '">' + escapeHtml(m.label) + '</button>').join('');
+    box.querySelectorAll('.food-mode-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        box.querySelectorAll('.food-mode-btn').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        document.getElementById('fl-amount-label').textContent =
+          b.dataset.lmode === 'units' ? 'How many ' + plural(item.unit.label) + '?' : 'Amount (g)';
+        updatePreview();
+      });
+    });
+    document.getElementById('fl-amount').value = '';
+    document.getElementById('fl-amount-label').textContent = 'Amount (g)';
+    updatePreview();
+  }
+
+  function currentMode() {
+    const on = document.querySelector('#fl-modes .food-mode-btn.active');
+    return on ? on.dataset.lmode : 'dry';
+  }
+
+  function updatePreview() {
+    const prev = document.getElementById('fl-preview');
+    const amt = parseFloat(document.getElementById('fl-amount').value);
+    if (!_logSelectedFood || isNaN(amt)) { prev.textContent = ''; return; }
+    const g = resolveGrams(_logSelectedFood, amt, currentMode());
+    const m = g === null ? null : computeMacros(_logSelectedFood, g);
+    prev.textContent = m
+      ? Math.round(m.kcal) + ' kcal · ' + m.protein + 'g P · ' +
+        m.carbs + 'g C · ' + m.fat + 'g F'
+      : 'Enter a valid amount';
+  }
+
+  search.addEventListener('input', () => renderResults(search.value));
+  document.getElementById('fl-amount').addEventListener('input', updatePreview);
+
+  document.getElementById('fl-save').addEventListener('click', async () => {
+    const amt = parseFloat(document.getElementById('fl-amount').value);
+    const entry = buildEntry(_logSelectedFood, amt, currentMode(),
+      document.getElementById('fl-meal').value, todayISO());
+    if (!entry) { toast('Enter a valid amount', true); return; }
+    await putNutritionEntry(entry);
+    toast('Logged ' + entry.foodName);
+    _logSelectedFood = null;
+    form.style.display = 'none';
+    setFoodMode('today');
+    nutritionSyncToGh().catch(e => console.warn('[nutrition sync]', e));
+  });
+
+  renderResults('');
+}
+
+// Implemented in a later task; stub keeps the rest testable alone.
 async function renderFoodPantry() {}
 async function nutritionSyncToGh() { return { ok: true }; }
 async function pantrySyncToGh() { return { ok: true }; }
