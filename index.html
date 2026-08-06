@@ -7267,12 +7267,23 @@ async function runSelfTests() {
     'olive oil panel passes (884 vs 900 derived)'));
   t(() => assert(validateMacroPanel({ kcal: 15, protein: 1.4, carbs: 2.9, fat: 0.2 }).ok,
     'low-calorie vegetable passes via absolute floor'));
+  // Fibre makes 4*carbs overshoot on plants — these are correct USDA values
+  // and must not be flagged.
+  t(() => assert(validateMacroPanel({ kcal: 34, protein: 2.8, carbs: 7, fat: 0.4 }).ok,
+    'broccoli passes despite 26% Atwater overshoot from fibre'));
+  t(() => assert(validateMacroPanel({ kcal: 23, protein: 2.9, carbs: 3.6, fat: 0.4 }).ok,
+    'spinach passes despite fibre overshoot'));
+  t(() => assert(validateMacroPanel({ kcal: 282, protein: 2.5, carbs: 75, fat: 0.4 }).ok,
+    'dried dates pass despite fibre overshoot'));
 
   // validateMacroPanel — catches misreads
   t(() => assert(!validateMacroPanel({ kcal: 950, protein: 0, carbs: 0, fat: 100 }).ok,
     'kcal above 900/100g rejected'));
   t(() => assert(!validateMacroPanel({ kcal: 100, protein: 50, carbs: 50, fat: 50 }).ok,
     'kcal inconsistent with macros rejected'));
+  // Derived BELOW stated kcal has no benign explanation — tight tolerance.
+  t(() => assert(!validateMacroPanel({ kcal: 400, protein: 12.5, carbs: 71.2, fat: 1.5 }).ok,
+    'kcal misread 352->400 caught by the tighter under-side tolerance'));
   t(() => assert(!validateMacroPanel({ kcal: -5, protein: 1, carbs: 1, fat: 1 }).ok,
     'negative kcal rejected'));
   t(() => assert(!validateMacroPanel({ kcal: 100, protein: 'x', carbs: 1, fat: 1 }).ok,
@@ -7311,6 +7322,34 @@ async function runSelfTests() {
     await deleteNutritionEntry('ent_selftest');
     assert((await getNutritionByDate('1999-12-31')).length === 0,
       'nutrition entry deletes');
+  })());
+
+  _selfTestAsync.push((async () => {
+    await openDB();
+    assert(BUILTIN_FOODS.length >= 60, 'built-in table has at least 60 foods');
+
+    // Every built-in food must have a self-consistent macro panel — a typo
+    // in this table would silently corrupt every log entry using that food.
+    let bad = [];
+    for (const f of BUILTIN_FOODS) {
+      if (!validateMacroPanel(f.per100g).ok) bad.push(f.name);
+      if (!f.name || !f.category) bad.push(f.name + ' (missing name/category)');
+      if (!(f.category in COOKED_FACTORS)) bad.push(f.name + ' (unknown category ' + f.category + ')');
+    }
+    assert(bad.length === 0, 'all built-in panels validate: ' + bad.join(', '));
+
+    // Names must be unique or the picker shows duplicates.
+    const names = BUILTIN_FOODS.map(f => f.name.toLowerCase());
+    assert(new Set(names).size === names.length, 'built-in food names are unique');
+
+    // Seeding is idempotent.
+    await seedBuiltinFoods();
+    const afterFirst = (await getAllPantry()).filter(p => p.source === 'builtin').length;
+    await seedBuiltinFoods();
+    const afterSecond = (await getAllPantry()).filter(p => p.source === 'builtin').length;
+    assert(afterFirst === afterSecond, 'seeding twice does not duplicate foods');
+    assert(afterFirst === BUILTIN_FOODS.length,
+      'all built-ins seeded (' + afterFirst + ' of ' + BUILTIN_FOODS.length + ')');
   })());
 
   count += _selfTestAsync.length;
@@ -7404,9 +7443,19 @@ function computeMacros(item, grams) {
 // label or a hallucinated value from the vision endpoint.
 //   - every field numeric and >= 0
 //   - kcal <= 900 (pure fat is 900 kcal/100g; nothing exceeds it)
-//   - kcal within 10% of 4*protein + 4*carbs + 9*fat
-// The tolerance has an absolute floor of 5 kcal so near-zero foods
-// (lettuce, black coffee) aren't flagged by a percentage that tight.
+//   - kcal roughly agrees with Atwater: 4*protein + 4*carbs + 9*fat
+//
+// The Atwater tolerance is deliberately ASYMMETRIC. Labels count dietary
+// fibre inside total carbohydrate, but fibre yields ~2 kcal/g rather than
+// 4, so 4*carbs over-estimates energy for fibre-rich foods — broccoli
+// derives 42.8 kcal against a true 34, a 26% overshoot that is entirely
+// normal. Nothing, however, makes the derived value come out BELOW the
+// stated kcal; that direction means a genuine error. So: 30% headroom
+// when derived exceeds kcal, 10% when it falls short.
+//
+// Known blind spot: a uniformly scaled panel (per-serving values mistaken
+// for per-100g) stays internally consistent and passes. The prompt tells
+// the model to convert, and the user confirms every panel before saving.
 function validateMacroPanel(p) {
   if (!p || typeof p !== 'object') return { ok: false, issues: ['missing'] };
   const issues = [];
@@ -7417,9 +7466,163 @@ function validateMacroPanel(p) {
   if (issues.length) return { ok: false, issues };
   if (p.kcal > 900) issues.push('kcal_too_high');
   const derived = 4 * p.protein + 4 * p.carbs + 9 * p.fat;
-  const tol = Math.max(Math.max(derived, p.kcal) * 0.10, 5);
-  if (Math.abs(derived - p.kcal) > tol) issues.push('kcal_mismatch');
+  const overBy = derived - p.kcal;
+  const tol = overBy >= 0
+    ? Math.max(p.kcal * 0.30, 10)   // fibre inflates the derived value
+    : Math.max(p.kcal * 0.10, 10);  // derived below label kcal is a real error
+  if (Math.abs(overBy) > tol) issues.push('kcal_mismatch');
   return { ok: issues.length === 0, issues };
+}
+
+// ============================================================
+// Nutrition — built-in foods
+// Common foods that have no package to photograph. Seeded into the
+// pantry store on first run so there is exactly one code path for
+// looking up a food, and so these stay editable if your eggs are a
+// different size than mine.
+//
+// All values are per 100g "as sold" (raw/dry), matching how packaged
+// labels are printed. Bump BUILTIN_SEED_VERSION after adding entries.
+// ============================================================
+
+const BUILTIN_SEED_VERSION = 1;
+
+// Grams cooked per gram as-sold. Starches gain water (>1); meat loses
+// it (<1). Used as the default when adding a food in that category;
+// always editable per item.
+const COOKED_FACTORS = {
+  pasta: 2.4, rice: 3.0, oats: 3.0, legumes: 2.4, couscous: 3.0, grain: 2.5,
+  meat: 0.75, fish: 0.80,
+  dairy: null, fat: null, fruit: null, veg: null, nuts: null,
+  supplement: null, bread: null, other: null,
+};
+
+const BUILTIN_FOODS = [
+  // --- eggs & dairy ---
+  { name: 'Egg, whole', category: 'other', per100g: { kcal: 143, protein: 12.6, carbs: 0.7, fat: 9.5 }, unit: { label: 'egg', grams: 55 } },
+  { name: 'Egg white', category: 'other', per100g: { kcal: 52, protein: 10.9, carbs: 0.7, fat: 0.2 }, unit: { label: 'white', grams: 33 } },
+  { name: 'Milk, whole', category: 'dairy', per100g: { kcal: 61, protein: 3.2, carbs: 4.8, fat: 3.3 } },
+  { name: 'Milk, semi-skimmed', category: 'dairy', per100g: { kcal: 47, protein: 3.4, carbs: 4.8, fat: 1.7 } },
+  { name: 'Greek yoghurt, 0%', category: 'dairy', per100g: { kcal: 59, protein: 10.2, carbs: 3.6, fat: 0.4 } },
+  { name: 'Greek yoghurt, full fat', category: 'dairy', per100g: { kcal: 97, protein: 9, carbs: 3.6, fat: 5 } },
+  { name: 'Cottage cheese', category: 'dairy', per100g: { kcal: 98, protein: 11, carbs: 3.4, fat: 4.3 } },
+  { name: 'Cheddar', category: 'dairy', per100g: { kcal: 403, protein: 25, carbs: 1.3, fat: 33 } },
+  { name: 'Mozzarella', category: 'dairy', per100g: { kcal: 280, protein: 28, carbs: 3.1, fat: 17 } },
+  { name: 'Parmesan', category: 'dairy', per100g: { kcal: 431, protein: 38, carbs: 4.1, fat: 29 } },
+  { name: 'Feta', category: 'dairy', per100g: { kcal: 264, protein: 14, carbs: 4.1, fat: 21 } },
+  { name: 'Butter', category: 'fat', per100g: { kcal: 717, protein: 0.9, carbs: 0.1, fat: 81 } },
+
+  // --- meat & fish ---
+  { name: 'Chicken breast, raw', category: 'meat', per100g: { kcal: 165, protein: 31, carbs: 0, fat: 3.6 } },
+  { name: 'Chicken thigh, raw', category: 'meat', per100g: { kcal: 209, protein: 26, carbs: 0, fat: 11 } },
+  { name: 'Beef mince 5%', category: 'meat', per100g: { kcal: 137, protein: 21, carbs: 0, fat: 5 } },
+  { name: 'Beef mince 20%', category: 'meat', per100g: { kcal: 254, protein: 17, carbs: 0, fat: 20 } },
+  { name: 'Beef steak, sirloin', category: 'meat', per100g: { kcal: 201, protein: 27, carbs: 0, fat: 10 } },
+  { name: 'Pork loin', category: 'meat', per100g: { kcal: 143, protein: 21, carbs: 0, fat: 6 } },
+  { name: 'Turkey breast', category: 'meat', per100g: { kcal: 157, protein: 29, carbs: 0, fat: 4 } },
+  { name: 'Bacon', category: 'meat', per100g: { kcal: 393, protein: 27, carbs: 1.3, fat: 31 } },
+  { name: 'Ham, sliced', category: 'meat', per100g: { kcal: 145, protein: 21, carbs: 1.5, fat: 6 } },
+  { name: 'Salmon, raw', category: 'fish', per100g: { kcal: 208, protein: 20, carbs: 0, fat: 13 } },
+  { name: 'Tuna, canned in water', category: 'fish', per100g: { kcal: 116, protein: 26, carbs: 0, fat: 1 } },
+  { name: 'Cod, raw', category: 'fish', per100g: { kcal: 82, protein: 18, carbs: 0, fat: 0.7 } },
+  { name: 'Prawns', category: 'fish', per100g: { kcal: 99, protein: 24, carbs: 0.2, fat: 0.3 } },
+  { name: 'Sardines, canned', category: 'fish', per100g: { kcal: 208, protein: 25, carbs: 0, fat: 11 } },
+
+  // --- starches ---
+  { name: 'Pasta, dry (generic)', category: 'pasta', per100g: { kcal: 352, protein: 12.5, carbs: 71.2, fat: 1.5 } },
+  { name: 'Wholewheat pasta, dry', category: 'pasta', per100g: { kcal: 348, protein: 14, carbs: 67, fat: 2.5 } },
+  { name: 'White rice, dry', category: 'rice', per100g: { kcal: 360, protein: 6.6, carbs: 80, fat: 0.6 } },
+  { name: 'Brown rice, dry', category: 'rice', per100g: { kcal: 367, protein: 7.9, carbs: 76, fat: 2.9 } },
+  { name: 'Basmati rice, dry', category: 'rice', per100g: { kcal: 356, protein: 8.5, carbs: 78, fat: 0.9 } },
+  { name: 'Couscous, dry', category: 'couscous', per100g: { kcal: 376, protein: 13, carbs: 77, fat: 0.6 } },
+  { name: 'Quinoa, dry', category: 'grain', per100g: { kcal: 368, protein: 14, carbs: 64, fat: 6 } },
+  { name: 'Rolled oats', category: 'oats', per100g: { kcal: 379, protein: 13, carbs: 68, fat: 6.5 } },
+  { name: 'Potato, raw', category: 'veg', per100g: { kcal: 77, protein: 2, carbs: 17, fat: 0.1 } },
+  { name: 'Sweet potato, raw', category: 'veg', per100g: { kcal: 86, protein: 1.6, carbs: 20, fat: 0.1 } },
+  { name: 'Bread, white', category: 'bread', per100g: { kcal: 265, protein: 9, carbs: 49, fat: 3.2 }, unit: { label: 'slice', grams: 36 } },
+  { name: 'Bread, wholemeal', category: 'bread', per100g: { kcal: 247, protein: 13, carbs: 41, fat: 3.4 }, unit: { label: 'slice', grams: 40 } },
+  { name: 'Tortilla wrap', category: 'bread', per100g: { kcal: 306, protein: 8.2, carbs: 51, fat: 7.9 }, unit: { label: 'wrap', grams: 62 } },
+  { name: 'Bagel', category: 'bread', per100g: { kcal: 250, protein: 10, carbs: 49, fat: 1.5 }, unit: { label: 'bagel', grams: 95 } },
+
+  // --- legumes ---
+  { name: 'Lentils, dry', category: 'legumes', per100g: { kcal: 352, protein: 25, carbs: 60, fat: 1.1 } },
+  { name: 'Chickpeas, dry', category: 'legumes', per100g: { kcal: 378, protein: 20, carbs: 63, fat: 6 } },
+  { name: 'Chickpeas, canned', category: 'legumes', per100g: { kcal: 139, protein: 7.1, carbs: 22, fat: 2.6 } },
+  { name: 'Black beans, canned', category: 'legumes', per100g: { kcal: 91, protein: 6, carbs: 16, fat: 0.3 } },
+  { name: 'Kidney beans, canned', category: 'legumes', per100g: { kcal: 94, protein: 6.5, carbs: 17, fat: 0.4 } },
+
+  // --- supplements ---
+  { name: 'Whey protein isolate', category: 'supplement', per100g: { kcal: 373, protein: 85, carbs: 3.5, fat: 1.5 }, unit: { label: 'scoop', grams: 30 } },
+  { name: 'Whey protein concentrate', category: 'supplement', per100g: { kcal: 400, protein: 75, carbs: 8, fat: 6 }, unit: { label: 'scoop', grams: 30 } },
+  { name: 'Casein protein', category: 'supplement', per100g: { kcal: 367, protein: 78, carbs: 6, fat: 2 }, unit: { label: 'scoop', grams: 30 } },
+  { name: 'Creatine monohydrate', category: 'supplement', per100g: { kcal: 0, protein: 0, carbs: 0, fat: 0 }, unit: { label: 'scoop', grams: 5 } },
+
+  // --- fats, nuts, seeds ---
+  { name: 'Olive oil', category: 'fat', per100g: { kcal: 884, protein: 0, carbs: 0, fat: 100 } },
+  { name: 'Peanut butter', category: 'nuts', per100g: { kcal: 588, protein: 25, carbs: 20, fat: 50 } },
+  { name: 'Almonds', category: 'nuts', per100g: { kcal: 579, protein: 21, carbs: 22, fat: 50 } },
+  { name: 'Walnuts', category: 'nuts', per100g: { kcal: 654, protein: 15, carbs: 14, fat: 65 } },
+  { name: 'Cashews', category: 'nuts', per100g: { kcal: 553, protein: 18, carbs: 30, fat: 44 } },
+  { name: 'Chia seeds', category: 'nuts', per100g: { kcal: 486, protein: 17, carbs: 42, fat: 31 } },
+  { name: 'Avocado', category: 'fruit', per100g: { kcal: 160, protein: 2, carbs: 9, fat: 15 } },
+
+  // --- fruit ---
+  { name: 'Banana', category: 'fruit', per100g: { kcal: 89, protein: 1.1, carbs: 23, fat: 0.3 }, unit: { label: 'banana', grams: 118 } },
+  { name: 'Apple', category: 'fruit', per100g: { kcal: 52, protein: 0.3, carbs: 14, fat: 0.2 }, unit: { label: 'apple', grams: 182 } },
+  { name: 'Orange', category: 'fruit', per100g: { kcal: 47, protein: 0.9, carbs: 12, fat: 0.1 }, unit: { label: 'orange', grams: 131 } },
+  { name: 'Blueberries', category: 'fruit', per100g: { kcal: 57, protein: 0.7, carbs: 14, fat: 0.3 } },
+  { name: 'Strawberries', category: 'fruit', per100g: { kcal: 32, protein: 0.7, carbs: 7.7, fat: 0.3 } },
+  { name: 'Grapes', category: 'fruit', per100g: { kcal: 69, protein: 0.7, carbs: 18, fat: 0.2 } },
+  { name: 'Mango', category: 'fruit', per100g: { kcal: 60, protein: 0.8, carbs: 15, fat: 0.4 } },
+  { name: 'Dates, dried', category: 'fruit', per100g: { kcal: 282, protein: 2.5, carbs: 75, fat: 0.4 }, unit: { label: 'date', grams: 24 } },
+
+  // --- vegetables ---
+  { name: 'Broccoli', category: 'veg', per100g: { kcal: 34, protein: 2.8, carbs: 7, fat: 0.4 } },
+  { name: 'Spinach', category: 'veg', per100g: { kcal: 23, protein: 2.9, carbs: 3.6, fat: 0.4 } },
+  { name: 'Tomato', category: 'veg', per100g: { kcal: 18, protein: 0.9, carbs: 3.9, fat: 0.2 } },
+  { name: 'Cucumber', category: 'veg', per100g: { kcal: 15, protein: 0.7, carbs: 3.6, fat: 0.1 } },
+  { name: 'Carrot', category: 'veg', per100g: { kcal: 41, protein: 0.9, carbs: 10, fat: 0.2 } },
+  { name: 'Onion', category: 'veg', per100g: { kcal: 40, protein: 1.1, carbs: 9.3, fat: 0.1 } },
+  { name: 'Bell pepper', category: 'veg', per100g: { kcal: 31, protein: 1, carbs: 6, fat: 0.3 } },
+  { name: 'Courgette', category: 'veg', per100g: { kcal: 17, protein: 1.2, carbs: 3.1, fat: 0.3 } },
+  { name: 'Mushrooms', category: 'veg', per100g: { kcal: 22, protein: 3.1, carbs: 3.3, fat: 0.3 } },
+  { name: 'Lettuce', category: 'veg', per100g: { kcal: 15, protein: 1.4, carbs: 2.9, fat: 0.2 } },
+  { name: 'Green beans', category: 'veg', per100g: { kcal: 31, protein: 1.8, carbs: 7, fat: 0.2 } },
+  { name: 'Peas, frozen', category: 'veg', per100g: { kcal: 81, protein: 5.4, carbs: 14, fat: 0.4 } },
+
+  // --- other ---
+  { name: 'Honey', category: 'other', per100g: { kcal: 304, protein: 0.3, carbs: 82, fat: 0 } },
+  { name: 'Dark chocolate 85%', category: 'other', per100g: { kcal: 592, protein: 10, carbs: 24, fat: 46 } },
+  { name: 'Hummus', category: 'other', per100g: { kcal: 166, protein: 7.9, carbs: 14, fat: 9.6 } },
+  { name: 'Tofu, firm', category: 'other', per100g: { kcal: 144, protein: 17, carbs: 2.8, fat: 8.7 } },
+];
+
+// Insert any built-in food not already present. Idempotent: matches on
+// lowercased name, so re-running after a version bump adds only the new
+// entries and never clobbers a user's edits to an existing one.
+async function seedBuiltinFoods() {
+  const existing = await getAllPantry();
+  const have = new Set(existing.map(p => p.name.toLowerCase()));
+  const now = new Date().toISOString();
+  let inserted = 0;
+  for (const f of BUILTIN_FOODS) {
+    if (have.has(f.name.toLowerCase())) continue;
+    await putPantryItem({
+      id: 'pnt_' + uid(),
+      name: f.name,
+      category: f.category,
+      per100g: f.per100g,
+      unit: f.unit || null,
+      cookedFactor: COOKED_FACTORS[f.category] ?? null,
+      source: 'builtin',
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+    });
+    inserted++;
+  }
+  await setConfig('builtinSeedVersion', BUILTIN_SEED_VERSION);
+  return inserted;
 }
 
 // Run on ?selftest=1 and render results instead of the normal app.

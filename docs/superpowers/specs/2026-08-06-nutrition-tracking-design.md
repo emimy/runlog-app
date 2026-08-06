@@ -193,9 +193,30 @@ fabricated numbers.
 Before pre-filling, validate the returned panel to catch a misread or
 hallucinated value:
 
-- `kcal` within 10% of `4×protein + 4×carbs + 9×fat`
-- all values ≥ 0
+- all values numeric and ≥ 0
 - `kcal ≤ 900` per 100 g (pure fat is 900)
+- `kcal` roughly agrees with Atwater: `4×protein + 4×carbs + 9×fat`
+
+**The Atwater tolerance is asymmetric** — revised during implementation after
+the symmetric ±10% rule flagged 10 of the 80 built-in foods, all fruit and
+vegetables. Labels count dietary fibre inside total carbohydrate, but fibre
+yields ~2 kcal/g rather than 4, so `4×carbs` over-estimates energy for
+fibre-rich foods: broccoli derives 42.8 kcal against a true 34, a 26%
+overshoot that is entirely normal. Nothing makes the derived value come out
+*below* the stated kcal, so that direction stays tight:
+
+| Direction | Tolerance |
+|---|---|
+| derived > kcal (fibre effect) | 30%, floor 10 kcal |
+| derived < kcal (real error) | 10%, floor 10 kcal |
+
+Verified: 0 of 80 built-in foods flagged, while still catching a nonsense
+panel, a 352→400 kcal misread, and a protein misread.
+
+**Known blind spot:** a uniformly scaled panel — per-serving values mistaken
+for per-100 g doubles everything — remains internally consistent and passes.
+No arithmetic check can catch that. Mitigations are the prompt instruction to
+convert per-serving values, and the user confirming every panel before saving.
 
 On failure the fields still pre-fill but are flagged for review rather than
 silently accepted.
