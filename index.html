@@ -2103,7 +2103,7 @@
 // this string, and if it's different from the one baked into the
 // current page, shows a banner prompting the user to reload.
 // ============================================================
-const APP_VERSION = '2026-06-29-45';
+const APP_VERSION = '2026-08-06-46';
 
 // ============================================================
 // IndexedDB setup
@@ -7552,6 +7552,27 @@ async function runSelfTests() {
     document.getElementById('pf-cancel').click();
   })());
 
+  _selfTestAsync.push((async () => {
+    await openDB();
+    // Without GitHub configured, sync must fail cleanly rather than throw —
+    // the UI calls these fire-and-forget after every mutation.
+    const savedCfg = ghConfig;
+    ghConfig = null;
+    const r1 = await pantrySyncToGh();
+    const r2 = await nutritionSyncToGh();
+    assert(r1.ok === false && r1.reason === 'no_github_config',
+      'pantrySyncToGh fails cleanly with no config');
+    assert(r2.ok === false && r2.reason === 'no_github_config',
+      'nutritionSyncToGh fails cleanly with no config');
+    // A clean failure must not set the dirty flag — there is nothing to retry
+    // until GitHub is actually configured.
+    assert((await getConfig('pantryDirty')) !== true,
+      'no-config failure does not mark pantry dirty');
+    assert((await getConfig('nutritionDirty')) !== true,
+      'no-config failure does not mark nutrition dirty');
+    ghConfig = savedCfg;
+  })());
+
   count += _selfTestAsync.length;
   await Promise.all(_selfTestAsync);
 
@@ -8249,8 +8270,80 @@ function readPantryForm() {
     issues: v.ok ? [] : v.issues,
   };
 }
-async function nutritionSyncToGh() { return { ok: true }; }
-async function pantrySyncToGh() { return { ok: true }; }
+// ============================================================
+// Nutrition — GitHub sync
+// Whole-file push of complete local state, mirroring vo2SyncToGh().
+// Deliberately NOT the sessions model: syncAllUnsynced() walks
+// getAllSessions() and would never see these stores.
+//
+// Because each push carries complete state, a failure is self-healing on
+// the next push. The one gap is a failure with no subsequent mutation, so
+// a dirty flag in the config store triggers a retry on next app load.
+// ============================================================
+
+async function _ghPutJson(path, payload, message) {
+  if (!ghConfig) return { ok: false, reason: 'no_github_config' };
+  try {
+    const url = 'https://api.github.com/repos/' + ghConfig.owner + '/' +
+      ghConfig.repo + '/contents/' + path;
+    const body = {
+      message,
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2)))),
+    };
+    const existingSha = await ghGetFileSha(path);
+    if (existingSha) body.sha = existingSha;
+    let res = await fetch(url, {
+      method: 'PUT',
+      headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    // Contents API occasionally reports a stale sha; fall back to the Trees API.
+    if (res.status === 409 || res.status === 422) {
+      const fresh = await ghGetFileShaViaTree(path);
+      if (fresh) {
+        body.sha = fresh;
+        res = await fetch(url, {
+          method: 'PUT',
+          headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      }
+    }
+    if (!res.ok) {
+      const err = await res.text();
+      return { ok: false, error: 'PUT ' + path + ': ' + res.status + ' ' + err.slice(0, 100) };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+async function pantrySyncToGh() {
+  const items = (await getAllPantry()).sort((a, b) => a.name.localeCompare(b.name));
+  const r = await _ghPutJson('pantry.json', items,
+    'update: pantry (' + items.length + ' foods)');
+  // Only track dirtiness once GitHub is actually configured — an unconfigured
+  // app is not "pending sync", it simply has nowhere to sync to.
+  if (r.reason !== 'no_github_config') await setConfig('pantryDirty', !r.ok);
+  return r;
+}
+
+async function nutritionSyncToGh() {
+  const entries = (await getAllNutrition())
+    .sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt));
+  const r = await _ghPutJson('nutrition.json', entries,
+    'update: nutrition (' + entries.length + ' entries)');
+  if (r.reason !== 'no_github_config') await setConfig('nutritionDirty', !r.ok);
+  return r;
+}
+
+// Called on app load. Retries whichever file failed to push last session.
+async function retryNutritionSyncIfDirty() {
+  if (!ghConfig) return;
+  if (await getConfig('pantryDirty'))    await pantrySyncToGh().catch(() => {});
+  if (await getConfig('nutritionDirty')) await nutritionSyncToGh().catch(() => {});
+}
 
 // Run on ?selftest=1 and render results instead of the normal app.
 if (new URLSearchParams(location.search).get('selftest') === '1') {
@@ -8687,6 +8780,10 @@ async function updateCount() {
       const n = await seedBuiltinFoods();
       if (n > 0) console.log('[nutrition] seeded ' + n + ' built-in foods');
     }
+
+    // Retry a nutrition/pantry push that failed in a previous session. Local
+    // IndexedDB is always the source of truth; only the GitHub copy can lag.
+    retryNutritionSyncIfDirty().catch(e => console.warn('[nutrition retry]', e));
 
     // VO2: first run a one-time migration from the old 7-entry monthly seed to
     // the new 57-entry weekly seed. This is a no-op for anyone whose store is
