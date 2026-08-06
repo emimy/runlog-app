@@ -7167,6 +7167,202 @@ async function vo2SyncToGh() {
   }
 }
 
+// ============================================================
+// Nutrition — pure math
+// Pure functions only: no DOM, no IndexedDB, no network. These carry
+// all the arithmetic risk in the nutrition feature and are the only
+// part covered by ?selftest=1.
+// ============================================================
+
+// --- self-test harness ---------------------------------------------------
+// The project has no test framework and no build step. Loading the app with
+// ?selftest=1 runs these assertions and renders the results in place of the
+// normal UI. Cheap, dependency-free, and runs in the real browser.
+let _selfTestFailures = [];
+let _selfTestAsync = [];
+
+function assert(cond, msg) {
+  if (!cond) _selfTestFailures.push(msg);
+  return !!cond;
+}
+
+function assertClose(actual, expected, tol, msg) {
+  const ok = typeof actual === 'number' && Math.abs(actual - expected) <= tol;
+  if (!ok) _selfTestFailures.push(msg + ' (got ' + actual + ', want ' + expected + '±' + tol + ')');
+  return ok;
+}
+
+async function runSelfTests() {
+  _selfTestFailures = [];
+  _selfTestAsync = [];
+  let count = 0;
+  const t = (fn) => { count++; fn(); };
+
+  const penne = {
+    per100g: { kcal: 352, protein: 12.5, carbs: 71.2, fat: 1.5 },
+    cookedFactor: 2.4, unit: null,
+  };
+  const egg = {
+    per100g: { kcal: 143, protein: 12.6, carbs: 0.7, fat: 9.5 },
+    cookedFactor: null, unit: { label: 'egg', grams: 55 },
+  };
+  const chicken = {
+    per100g: { kcal: 165, protein: 31, carbs: 0, fat: 3.6 },
+    cookedFactor: 0.75, unit: null,
+  };
+
+  // resolveGrams — dry mode is identity
+  t(() => assert(resolveGrams(penne, 120, 'dry') === 120, 'dry mode returns amount unchanged'));
+
+  // resolveGrams — cooked mode divides by the factor (water gained)
+  t(() => assertClose(resolveGrams(penne, 288, 'cooked'), 120, 0.001,
+    'cooked pasta converts back to dry weight'));
+
+  // resolveGrams — cooked mode also handles water LOST (factor < 1)
+  t(() => assertClose(resolveGrams(chicken, 75, 'cooked'), 100, 0.001,
+    'cooked chicken converts back to raw weight'));
+
+  // resolveGrams — units mode multiplies
+  t(() => assert(resolveGrams(egg, 3, 'units') === 165, '3 eggs resolves to 165g'));
+
+  // resolveGrams — invalid inputs return null, never NaN
+  t(() => assert(resolveGrams(penne, -5, 'dry') === null, 'negative amount rejected'));
+  t(() => assert(resolveGrams(penne, 100, 'units') === null, 'units mode without unit rejected'));
+  t(() => assert(resolveGrams(egg, 100, 'cooked') === null, 'cooked mode without factor rejected'));
+  t(() => assert(resolveGrams(penne, 100, 'bogus') === null, 'unknown mode rejected'));
+  t(() => assert(resolveGrams(null, 100, 'dry') === null, 'null item rejected'));
+
+  // computeMacros — scales linearly from per-100g
+  t(() => {
+    const m = computeMacros(penne, 120);
+    assertClose(m.kcal, 422.4, 0.05, 'penne 120g kcal');
+    assertClose(m.protein, 15, 0.05, 'penne 120g protein');
+    assertClose(m.carbs, 85.4, 0.05, 'penne 120g carbs');
+    assertClose(m.fat, 1.8, 0.05, 'penne 120g fat');
+  });
+  t(() => {
+    const m = computeMacros(egg, 165);
+    assertClose(m.protein, 20.8, 0.05, '3 eggs protein');
+  });
+  t(() => assert(computeMacros(penne, 0).kcal === 0, 'zero grams gives zero kcal'));
+  t(() => assert(computeMacros(penne, -1) === null, 'negative grams rejected'));
+
+  // validateMacroPanel — real labels pass
+  t(() => assert(validateMacroPanel(penne.per100g).ok, 'penne panel is self-consistent'));
+  t(() => assert(validateMacroPanel({ kcal: 884, protein: 0, carbs: 0, fat: 100 }).ok,
+    'olive oil panel passes (884 vs 900 derived)'));
+  t(() => assert(validateMacroPanel({ kcal: 15, protein: 1.4, carbs: 2.9, fat: 0.2 }).ok,
+    'low-calorie vegetable passes via absolute floor'));
+
+  // validateMacroPanel — catches misreads
+  t(() => assert(!validateMacroPanel({ kcal: 950, protein: 0, carbs: 0, fat: 100 }).ok,
+    'kcal above 900/100g rejected'));
+  t(() => assert(!validateMacroPanel({ kcal: 100, protein: 50, carbs: 50, fat: 50 }).ok,
+    'kcal inconsistent with macros rejected'));
+  t(() => assert(!validateMacroPanel({ kcal: -5, protein: 1, carbs: 1, fat: 1 }).ok,
+    'negative kcal rejected'));
+  t(() => assert(!validateMacroPanel({ kcal: 100, protein: 'x', carbs: 1, fat: 1 }).ok,
+    'non-numeric macro rejected'));
+  t(() => assert(!validateMacroPanel(null).ok, 'null panel rejected'));
+
+  count += _selfTestAsync.length;
+  await Promise.all(_selfTestAsync);
+
+  return { count, failures: _selfTestFailures };
+}
+
+// --- math ----------------------------------------------------------------
+
+// Round to one decimal. Macro panels are never more precise than this, and
+// it keeps summed daily totals from accumulating float noise.
+function round1(n) {
+  return Math.round(n * 10) / 10;
+}
+
+// Resolve a user-entered amount to grams "as sold" — the basis every
+// per-100g label uses.
+//   dry    : the amount already is as-sold grams (weighed before cooking)
+//   cooked : divide by cookedFactor. Works in both directions — pasta gains
+//            water (factor 2.4) and chicken loses it (factor 0.75), and
+//            amount/factor recovers the as-sold weight either way.
+//   units  : multiply by the item's per-unit gram weight (e.g. 1 egg = 55g)
+// Returns null rather than NaN on any invalid input so callers can show a
+// validation message instead of writing garbage to the log.
+function resolveGrams(item, amount, mode) {
+  if (!item) return null;
+  if (typeof amount !== 'number' || !isFinite(amount) || amount < 0) return null;
+  if (mode === 'dry') return amount;
+  if (mode === 'cooked') {
+    const f = item.cookedFactor;
+    if (typeof f !== 'number' || !isFinite(f) || f <= 0) return null;
+    return amount / f;
+  }
+  if (mode === 'units') {
+    const g = item.unit && item.unit.grams;
+    if (typeof g !== 'number' || !isFinite(g) || g <= 0) return null;
+    return amount * g;
+  }
+  return null;
+}
+
+// Scale a pantry item's per-100g panel to an actual gram weight.
+function computeMacros(item, grams) {
+  if (!item || !item.per100g) return null;
+  if (typeof grams !== 'number' || !isFinite(grams) || grams < 0) return null;
+  const r = grams / 100;
+  const p = item.per100g;
+  return {
+    kcal:    round1(p.kcal * r),
+    protein: round1(p.protein * r),
+    carbs:   round1(p.carbs * r),
+    fat:     round1(p.fat * r),
+  };
+}
+
+// Sanity-check a per-100g panel before trusting it — catches a misread
+// label or a hallucinated value from the vision endpoint.
+//   - every field numeric and >= 0
+//   - kcal <= 900 (pure fat is 900 kcal/100g; nothing exceeds it)
+//   - kcal within 10% of 4*protein + 4*carbs + 9*fat
+// The tolerance has an absolute floor of 5 kcal so near-zero foods
+// (lettuce, black coffee) aren't flagged by a percentage that tight.
+function validateMacroPanel(p) {
+  if (!p || typeof p !== 'object') return { ok: false, issues: ['missing'] };
+  const issues = [];
+  for (const k of ['kcal', 'protein', 'carbs', 'fat']) {
+    const v = p[k];
+    if (typeof v !== 'number' || !isFinite(v) || v < 0) issues.push(k + '_invalid');
+  }
+  if (issues.length) return { ok: false, issues };
+  if (p.kcal > 900) issues.push('kcal_too_high');
+  const derived = 4 * p.protein + 4 * p.carbs + 9 * p.fat;
+  const tol = Math.max(Math.max(derived, p.kcal) * 0.10, 5);
+  if (Math.abs(derived - p.kcal) > tol) issues.push('kcal_mismatch');
+  return { ok: issues.length === 0, issues };
+}
+
+// Run on ?selftest=1 and render results instead of the normal app.
+if (new URLSearchParams(location.search).get('selftest') === '1') {
+  window.addEventListener('DOMContentLoaded', async () => {
+    let r;
+    try {
+      r = await runSelfTests();
+    } catch (err) {
+      document.body.innerHTML =
+        '<pre style="padding:16px;font:13px/1.5 ui-monospace,monospace;white-space:pre-wrap">' +
+        '💥 self-tests threw: ' + (err && err.message) + '</pre>';
+      return;
+    }
+    document.body.innerHTML =
+      '<pre style="padding:16px;font:13px/1.5 ui-monospace,monospace;white-space:pre-wrap">' +
+      (r.failures.length === 0
+        ? '✅ ' + r.count + ' self-test groups passed'
+        : '❌ ' + r.failures.length + ' failure(s) of ' + r.count + ' groups\n\n' +
+          r.failures.map(f => '  • ' + f).join('\n')) +
+      '</pre>';
+  });
+}
+
 // GitHub sync of program completion as a single program_completion.json.
 // Stored as an object map { "5-Monday": { completed: true, completedAt: "..." }, ... }
 // for compactness. Local store mirrors this shape (with a 'key' field per entry
