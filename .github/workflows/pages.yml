@@ -1,0 +1,51 @@
+# Publish the RunLog PWA to GitHub Pages.
+#
+# Replaces the legacy Pages build, which failed three times in a row with a
+# duration of 0 and no diagnostic beyond "Page build failed". This workflow
+# does the same job — upload the repo as static files — but surfaces real
+# logs when something goes wrong.
+#
+# There is no build step by design: index.html is hand-edited and self-
+# contained, and the app's self-update check reads APP_VERSION straight out
+# of the served file.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity-check the app before publishing
+        run: |
+          test -f index.html || { echo "index.html missing"; exit 1; }
+          test -f .nojekyll || { echo ".nojekyll missing"; exit 1; }
+          grep -q "const APP_VERSION" index.html || { echo "APP_VERSION not found"; exit 1; }
+          echo "Publishing $(grep -o "const APP_VERSION = '[^']*'" index.html | head -1)"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
